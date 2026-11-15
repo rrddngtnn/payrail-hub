@@ -292,8 +292,8 @@ async def extract(request: Request, body: ExtractBody):
     if _hourly_usage(user_id) >= HOURLY_LIMIT:
         raise HTTPException(status_code=429, detail="Hourly job limit reached")
     raw = body.access_token.strip()
-    if not (raw.startswith("{") or raw.lower().startswith("bearer ") or raw.count(".") >= 2):
-        raise HTTPException(status_code=400, detail="Please paste a full Session JSON or a valid accessToken")
+    if not (raw.startswith("{") or raw.startswith("[") or raw.lower().startswith("bearer ") or "next-auth.session-token=" in raw or raw.count(".") >= 2):
+        raise HTTPException(status_code=400, detail="Please paste a Session JSON, cookie export, or valid accessToken")
     result = await asyncio.to_thread(rail_service.start_extract, raw, user_id=user_id)
     if not result.get("success"):
         error = sanitize_upi_extract_message(result.get("error")) or "Failed to create job"

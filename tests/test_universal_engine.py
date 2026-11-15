@@ -291,6 +291,24 @@ def test_fastapi_multi_rail_endpoints():
             )
             assert st == 503
 
+            # Cookie-array JSON and raw cookie string must pass input format gate (not 400)
+            os.environ["PAYRAIL_PROXY_IDEAL"] = "http://u:p@nl.example.com:9000"
+            try:
+                for sample in (
+                    '[{"name":"__Secure-next-auth.session-token","value":"' + "x" * 30 + '"}]',
+                    "__Secure-next-auth.session-token=" + "y" * 30 + "; Path=/",
+                ):
+                    st_fmt, _, body_fmt = _asgi_call(
+                        main_mod.app,
+                        "POST",
+                        "/api/extract",
+                        headers={"Cookie": cookie_hdr, "X-CSRF-Token": csrf},
+                        json_body={"access_token": sample, "rail": "ideal"},
+                    )
+                    assert "cookie export" not in str(body_fmt), f"format check rejected {sample[:20]}: {st_fmt} {body_fmt}"
+            finally:
+                os.environ.pop("PAYRAIL_PROXY_IDEAL", None)
+
             st, _, recs_data = _asgi_call(main_mod.app, "GET", "/api/records", query="rail=ideal", headers={"Cookie": cookie_hdr})
             assert st == 200
             assert recs_data["total"] == 0
@@ -355,6 +373,35 @@ def test_stale_job_does_not_execute_worker():
                 os.environ.pop("PAYRAIL_DATABASE", None)
             else:
                 os.environ["PAYRAIL_DATABASE"] = prev_db
+
+
+def test_token_and_session_cookie_parsing():
+    import json
+    from api_python.upi_link_service import _extract_session_token_from_raw, normalize_access_token
+
+    jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.sigpart1234567890"
+    assert normalize_access_token(jwt) == jwt
+    assert normalize_access_token(f"Bearer {jwt}") == jwt
+    assert normalize_access_token(json.dumps({"accessToken": jwt, "sessionToken": "sess_abc"})) == jwt
+    assert _extract_session_token_from_raw(json.dumps({"accessToken": jwt, "sessionToken": "sess_abc"})) == "sess_abc"
+
+    # sessionToken-only JSON must NOT leak sessionToken or email as accessToken
+    only_sess = json.dumps({"user": {"email": "u@example.com"}, "sessionToken": "sess_only_123"})
+    assert normalize_access_token(only_sess) == ""
+    assert _extract_session_token_from_raw(only_sess) == "sess_only_123"
+
+    # Browser cookie-export JSON array
+    cookie_export = json.dumps([
+        {"name": "oai-did", "value": "did-1"},
+        {"name": "__Secure-next-auth.session-token", "value": "cookie_tok_xyz"},
+    ])
+    assert normalize_access_token(cookie_export) == ""
+    assert _extract_session_token_from_raw(cookie_export) == "cookie_tok_xyz"
+
+    # Raw Cookie header string
+    cookie_hdr = "oai-did=123; __Secure-next-auth.session-token=hdr_tok_999; Path=/"
+    assert normalize_access_token(cookie_hdr) == ""
+    assert _extract_session_token_from_raw(cookie_hdr) == "hdr_tok_999"
 
 
 if __name__ == "__main__":

@@ -30,8 +30,8 @@
           <form id="extractForm">
             <div class="label"><label for="railSelect">Payment rail</label><span id="railMeta" class="hint">—</span></div>
             <select id="railSelect" class="rail-select"></select>
-            <div class="label"><label for="session">Session JSON / accessToken</label><span id="charCount" class="hint">0 chars</span></div>
-            <textarea id="session" autocomplete="off" spellcheck="false" placeholder="Paste the full Session JSON containing accessToken and sessionToken" required></textarea>
+            <div class="label"><label for="session">Session JSON / Cookie Export / accessToken</label><span id="charCount" class="hint">0 chars</span></div>
+            <textarea id="session" autocomplete="off" spellcheck="false" placeholder="Paste Session JSON, browser cookie export JSON, cookie header, or raw accessToken" required></textarea>
             <div class="actions"><button id="clear" class="secondary" type="button">Clear</button><button id="submit" class="primary" type="submit">Extract</button></div>
           </form>
           <div id="progressWrap" hidden>

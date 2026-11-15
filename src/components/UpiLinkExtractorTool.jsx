@@ -63,8 +63,8 @@ export default function UpiLinkExtractorTool({
     const text = {
         title: `PayRail — ${railUpper} Payment Link`,
         railLabel: 'Payment Rail',
-        tokenLabel: 'Session JSON',
-        tokenPlaceholder: 'Paste full session JSON (accessToken + sessionToken)',
+        tokenLabel: 'Session JSON / Cookie / accessToken',
+        tokenPlaceholder: 'Paste Session JSON, browser cookie export JSON, cookie header, or raw accessToken',
         submit: `Generate ${railUpper} Link`,
         submitting: 'Extracting…',
         progress: 'Progress',

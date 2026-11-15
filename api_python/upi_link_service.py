@@ -500,6 +500,10 @@ def proxy_for_region(proxy: str, region: str) -> str:
         rewritten = re.sub('-st-[^-:@]+-sid-', '-sid-', rewritten)
     return rewritten
 
+def _looks_like_jwt(val: str) -> bool:
+    s = str(val or '').strip()
+    return len(s) >= 30 and s.count('.') >= 2 and not any(c in s for c in ' \t\r\n;=')
+
 def normalize_access_token(raw: str) -> str:
     text = str(raw or '').strip()
     if text.lower().startswith('bearer '):
@@ -512,20 +516,44 @@ def normalize_access_token(raw: str) -> str:
         except json.JSONDecodeError:
             return ''
         return _find_token(data) or ''
+    if re.search(r'(?:^|[;\s])(?:__Secure-)?next-auth\.session-token=', text):
+        return ''
     return text
 
-def _parse_session_object(raw: str) -> dict[str, Any]:
-    text = str(raw or '').strip()
-    if not text.startswith('{'):
-        return {}
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
+def _find_session_token_in_obj(value: Any) -> str:
+    if isinstance(value, dict):
+        name = str(value.get('name') or '').strip()
+        if name in SESSION_COOKIE_NAMES:
+            val = str(value.get('value') or '').strip()
+            if val:
+                return val
+        for key in ('sessionToken', 'session_token', '__Secure-next-auth.session-token', 'next-auth.session-token'):
+            val = value.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        for item in value.values():
+            found = _find_session_token_in_obj(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_session_token_in_obj(item)
+            if found:
+                return found
+    return ''
 
 def _extract_session_token_from_raw(raw: str) -> str:
-    return str(_parse_session_object(raw).get('sessionToken') or '').strip()
+    text = str(raw or '').strip()
+    if not text:
+        return ''
+    if text.startswith('{') or text.startswith('['):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return ''
+        return _find_session_token_in_obj(data)
+    m = re.search(r'(?:^|[;\s])(?:__Secure-)?next-auth\.session-token=([^;\s]+)', text)
+    return m.group(1).strip() if m else ''
 
 def _refresh_access_token_from_session(session_token: str, proxy: str, device_id: str) -> str:
     from curl_cffi import requests as cr
@@ -555,17 +583,18 @@ def _refresh_access_token_from_session(session_token: str, proxy: str, device_id
 
 def resolve_upi_access_token(raw: str, proxy: str='', *, region: str='IN') -> str:
     token = normalize_access_token(raw)
-    if not token:
+    session_token = _extract_session_token_from_raw(raw)
+    if not token and not session_token:
         return ''
     proxy_url = str(proxy or resolve_upi_proxy() or '').strip()
     if not proxy_url:
         return token
     client = UpiHttpClient(proxy_url, region=region)
     try:
-        st, _, _ = client.request('GET', 'https://chatgpt.com/backend-api/me', headers=_chatgpt_headers(client, token), proxy=proxy_url)
-        if st == 200:
-            return token
-        session_token = _extract_session_token_from_raw(raw)
+        if token:
+            st, _, _ = client.request('GET', 'https://chatgpt.com/backend-api/me', headers=_chatgpt_headers(client, token), proxy=proxy_url)
+            if st == 200:
+                return token
         if not session_token:
             return token
         fresh = _refresh_access_token_from_session(session_token, proxy_url, client.device_id)
@@ -578,8 +607,10 @@ def resolve_upi_access_token(raw: str, proxy: str='', *, region: str='IN') -> st
 
 def _find_token(value: Any) -> str | None:
     if isinstance(value, str):
-        token = normalize_access_token(value)
-        return token or None
+        s = value.strip()
+        if s.lower().startswith('bearer '):
+            s = s[7:].strip()
+        return s if _looks_like_jwt(s) else None
     if isinstance(value, list):
         for item in value:
             found = _find_token(item)
@@ -588,11 +619,16 @@ def _find_token(value: Any) -> str | None:
         return None
     if isinstance(value, dict):
         for key in ('accessToken', 'access_token', 'token'):
-            if key in value:
-                found = _find_token(value.get(key))
-                if found:
-                    return found
-        for item in value.values():
+            val = value.get(key)
+            if isinstance(val, str):
+                s = val.strip()
+                if s.lower().startswith('bearer '):
+                    s = s[7:].strip()
+                if s:
+                    return s
+        for key, item in value.items():
+            if key in ('sessionToken', 'session_token', '__Secure-next-auth.session-token', 'next-auth.session-token'):
+                continue
             found = _find_token(item)
             if found:
                 return found
