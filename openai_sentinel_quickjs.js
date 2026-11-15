@@ -327,9 +327,14 @@ function installRuntime(payload) {
         return {};
       },
     };
-  globalThis.fetch = async () => {
-    throw new Error("fetch should not be called");
-  };
+  if (typeof globalThis.__real_fetch === "function") {
+    // Network-capable actions (init/observer/token) get a real fetch; the rest keep the throw-mock.
+    globalThis.fetch = globalThis.__real_fetch;
+  } else {
+    globalThis.fetch = async () => {
+      throw new Error("fetch should not be called");
+    };
+  }
 
   const randomFill = (arr) => {
     for (let i = 0; i < arr.length; i += 1) {
@@ -371,6 +376,24 @@ async function run(payload, sdkSource) {
     const dx = challenge && challenge.turnstile ? challenge.turnstile.dx : null;
     const tValue = dx ? await globalThis.SentinelSDK.__debug_n(challenge, dx) : null;
     return { final_p: finalP, t: tValue };
+  }
+
+  if (payload.action === "observer" || payload.action === "token") {
+    const flow = String(payload.flow || "").trim();
+    if (!flow) throw new Error("missing flow");
+    try {
+      await globalThis.SentinelSDK.init(flow);
+    } catch (e) {
+      // init may fail if already initialized or unavailable; continue
+    }
+    if (payload.action === "observer") {
+      const soToken = await globalThis.SentinelSDK.sessionObserverToken(flow);
+      if (!soToken) throw new Error("sessionObserverToken returned empty");
+      return { so_token: soToken };
+    }
+    const token = await globalThis.SentinelSDK.token(flow);
+    if (!token) throw new Error("token returned empty");
+    return { token: token };
   }
 
   throw new Error(`unsupported action: ${payload.action}`);

@@ -103,6 +103,10 @@ process.stdin.on('end', async () => {
     globalThis.__vm_done = false;
     globalThis.__vm_output_json = '';
     globalThis.__vm_error = '';
+    if (payload.action === 'observer' || payload.action === 'token') {
+      // Network-capable actions run the SDK with real fetch (node >= 18 global fetch).
+      globalThis.__real_fetch = (typeof fetch === 'function') ? fetch.bind(globalThis) : undefined;
+    }
     const script = fs.readFileSync(scriptFile, 'utf8');
     eval(script);
 
