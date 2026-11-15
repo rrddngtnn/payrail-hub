@@ -17,7 +17,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import config as app_config
 from .db import cleanup_database, get_primary_db, init_database
-from .rails import bootstrap_default_rails
+from .rail_specs import SPECS, get_spec
+from .rails import RAILS, bootstrap_default_rails, get_rail
 from .portal_tools_service import sanitize_upi_extract_message
 from .security import (
     clear_login_attempts,
@@ -38,9 +39,9 @@ from .upi_link_admin_service import (
 from .upi_link_service import (
     get_upi_link_status,
     recover_stale_upi_records,
+    resolve_rail_proxy,
     resolve_upi_promotion_proxy,
     resolve_upi_proxy,
-    start_upi_link_extract,
 )
 
 
@@ -58,6 +59,7 @@ class LoginBody(BaseModel):
 
 class ExtractBody(BaseModel):
     access_token: str = Field(min_length=20, max_length=200_000)
+    rail: str = Field(default="upi", min_length=1, max_length=32)
 
 
 class ModeBody(BaseModel):
@@ -176,12 +178,54 @@ async def logout(request: Request):
     return {"success": True}
 
 
+def _rail_status_list() -> list[dict]:
+    bootstrap_default_rails()
+    dedicated_promotion = str(
+        os.environ.get("PAYRAIL_PROMOTION_PROXY")
+        or os.environ.get("UPI_LINK_PROMOTION_PROXY")
+        or ""
+    ).strip()
+    items: list[dict] = []
+    for rail_id in sorted(RAILS):
+        spec = SPECS.get(rail_id)
+        if not spec:
+            items.append({"rail_id": rail_id, "label": rail_id.upper()})
+            continue
+        proxy = resolve_rail_proxy(rail_id)
+        promo_region = spec.resolve_promotion_region()
+        promo_proxy = resolve_upi_promotion_proxy(proxy, promotion_region=promo_region) if promo_region else ""
+        items.append({
+            "rail_id": spec.rail_id,
+            "label": spec.display_label(),
+            "country": spec.country,
+            "currency": spec.currency,
+            "payment_method_type": spec.payment_method_type,
+            "requires_promotion_proxy": bool(promo_region),
+            "promotion_region": promo_region or "",
+            "proxy_configured": bool(proxy),
+            "promotion_proxy_configured": bool(dedicated_promotion) if promo_region else True,
+            "proxy_masked": _mask_proxy(proxy),
+            "promotion_proxy_masked": _mask_proxy(promo_proxy) if promo_region else "",
+        })
+    return items
+
+
+@app.get("/api/rails")
+async def list_rails(request: Request):
+    require_user(request)
+    return {"success": True, "rails": _rail_status_list()}
+
+
 @app.get("/api/config")
 async def config(request: Request):
     require_user(request)
     india = resolve_upi_proxy()
     promotion = resolve_upi_promotion_proxy(india)
-    dedicated_promotion = str(os.environ.get("UPI_LINK_PROMOTION_PROXY") or "").strip()
+    dedicated_promotion = str(
+        os.environ.get("PAYRAIL_PROMOTION_PROXY")
+        or os.environ.get("UPI_LINK_PROMOTION_PROXY")
+        or ""
+    ).strip()
     return {
         "success": True,
         "mode": get_upi_link_submit_override(),
@@ -190,6 +234,7 @@ async def config(request: Request):
         "india_proxy_masked": _mask_proxy(india),
         "promotion_proxy_masked": _mask_proxy(promotion),
         "hourly_limit": HOURLY_LIMIT,
+        "rails": _rail_status_list(),
     }
 
 
@@ -221,18 +266,35 @@ async def extract(request: Request, body: ExtractBody):
     user_id = require_user(request)
     require_csrf(request)
     if get_upi_link_submit_override() == "offline":
-        raise HTTPException(status_code=503, detail="UPI extraction is under maintenance")
-    india = resolve_upi_proxy()
-    promotion = resolve_upi_promotion_proxy(india)
-    dedicated_promotion = str(os.environ.get("UPI_LINK_PROMOTION_PROXY") or "").strip()
-    if not india or not promotion or not dedicated_promotion:
-        raise HTTPException(status_code=503, detail="India proxy or Vietnam promotion proxy is not configured")
+        raise HTTPException(status_code=503, detail="Extraction is under maintenance")
+    bootstrap_default_rails()
+    rail_id = body.rail.strip().lower()
+    if rail_id not in RAILS:
+        raise HTTPException(status_code=400, detail=f"Unsupported rail: {rail_id}")
+    spec = get_spec(rail_id)
+    rail_service = get_rail(rail_id)
+    proxy = resolve_rail_proxy(rail_id)
+    if not proxy:
+        raise HTTPException(status_code=503, detail=f"Proxy for rail '{rail_id}' is not configured")
+    promo_region = spec.resolve_promotion_region()
+    if promo_region:
+        dedicated_promotion = str(
+            os.environ.get("PAYRAIL_PROMOTION_PROXY")
+            or os.environ.get("UPI_LINK_PROMOTION_PROXY")
+            or ""
+        ).strip()
+        promotion = resolve_upi_promotion_proxy(proxy, promotion_region=promo_region)
+        if not promotion or not dedicated_promotion:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Promotion proxy ({promo_region}) is not configured for rail '{rail_id}'",
+            )
     if _hourly_usage(user_id) >= HOURLY_LIMIT:
         raise HTTPException(status_code=429, detail="Hourly job limit reached")
     raw = body.access_token.strip()
     if not (raw.startswith("{") or raw.lower().startswith("bearer ") or raw.count(".") >= 2):
         raise HTTPException(status_code=400, detail="Please paste a full Session JSON or a valid accessToken")
-    result = await asyncio.to_thread(start_upi_link_extract, raw, user_id=user_id)
+    result = await asyncio.to_thread(rail_service.start_extract, raw, user_id=user_id)
     if not result.get("success"):
         error = sanitize_upi_extract_message(result.get("error")) or "Failed to create job"
         raise HTTPException(status_code=400, detail=error)
@@ -251,7 +313,7 @@ async def status(request: Request, job_id: str):
 
 
 @app.get("/api/records")
-async def records(request: Request, search: str = "", limit: int = 80, offset: int = 0):
+async def records(request: Request, search: str = "", rail: str = "", limit: int = 80, offset: int = 0):
     require_user(request)
     recover_stale_upi_records(max_age_sec=360)
-    return {"success": True, **list_upi_link_records(search=search, limit=limit, offset=offset)}
+    return {"success": True, **list_upi_link_records(search=search, rail=rail, limit=limit, offset=offset)}

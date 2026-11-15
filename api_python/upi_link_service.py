@@ -30,15 +30,24 @@ IN_ACCEPT_LANGUAGE = 'en-IN,en;q=0.9,hi;q=0.8'
 IN_BROWSER_LOCALE = 'en-IN'
 VN_ACCEPT_LANGUAGE = 'vi-VN,vi;q=0.9,en;q=0.8'
 VN_BROWSER_LOCALE = 'vi-VN'
+COUNTRY_LOCALES = {
+    'IN': (IN_ACCEPT_LANGUAGE, IN_BROWSER_LOCALE),
+    'VN': (VN_ACCEPT_LANGUAGE, VN_BROWSER_LOCALE),
+    'NL': ('en-NL,nl;q=0.9,en;q=0.8', 'en-NL'),
+    'BR': ('pt-BR,pt;q=0.9,en;q=0.8', 'pt-BR'),
+    'ID': ('en-ID,id;q=0.9,en;q=0.8', 'en-ID'),
+    'PH': ('en-PH,en;q=0.9', 'en-PH'),
+    'TH': ('th-TH,th;q=0.9,en;q=0.8', 'th-TH'),
+}
 HUMAN_DELAY_SHORT = (0.8, 1.8)
 HUMAN_DELAY_MED = (1.5, 3.2)
 HUMAN_DELAY_LONG = (2.5, 5.0)
 REGION_HANDOFF_DELAY = (3.5, 6.5)
-CHATGPT_CLIENT_VERSION = 'prod-db390ebea64862bf1899c420a4c736e0cf639747'
-CHATGPT_CLIENT_BUILD = '7904904'
-STRIPE_VERSION = '2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1'
-STRIPE_RUNTIME_VERSION = '6f8494a281'
-UPI_PROMO_COUPON = 'plus-1-month-free'
+CHATGPT_CLIENT_VERSION = os.environ.get('PAYRAIL_CHATGPT_CLIENT_VERSION') or 'prod-db390ebea64862bf1899c420a4c736e0cf639747'
+CHATGPT_CLIENT_BUILD = os.environ.get('PAYRAIL_CHATGPT_CLIENT_BUILD') or '7904904'
+STRIPE_VERSION = os.environ.get('PAYRAIL_STRIPE_VERSION') or '2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1'
+STRIPE_RUNTIME_VERSION = os.environ.get('PAYRAIL_STRIPE_RUNTIME_VERSION') or '6f8494a281'
+UPI_PROMO_COUPON = os.environ.get('PAYRAIL_UPI_PROMO_COUPON') or 'plus-1-month-free'
 DEFAULT_LOCAL_PROXY = ""
 UPI_SCHEME_RE = re.compile('upi://pay[^\\s\\"\'<>]*', re.I)
 STRIPE_HOSTED_RE = re.compile('https://hooks\\.stripe\\.com/redirect/[^\\s\\"\'<>]+', re.I)
@@ -363,31 +372,55 @@ def _persist_job_progress(job_id: str, *, steps: list[dict[str, str]], status: s
     _write_debug_artifact(jid, {'job_id': jid, 'status': status, 'error': safe_error, 'steps': safe_steps, 'debug': debug or {}, 'updated_at': time.time()})
 
 def _load_env_file() -> None:
-    path = os.path.join(_project_root(), 'env_upi_link.txt')
-    if not os.path.isfile(path):
-        return
-    try:
-        with open(path, encoding='utf-8') as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line or line.startswith('#') or '=' not in line:
-                    continue
-                key, value = line.split('=', 1)
-                key = key.strip()
-                if not key.startswith('UPI_LINK_'):
-                    continue
-                val = value.strip().strip('"').strip("'")
-                if val and (not str(os.environ.get(key) or '').strip()):
-                    os.environ[key] = val
-    except Exception:
-        pass
+    prefixes = ('PAYRAIL_', 'UPI_LINK_', 'IDEAL_LINK_', 'PIX_LINK_', 'GOPAY_LINK_', 'MOMO_LINK_')
+    for fname in ('.env', 'env_payrail.txt', 'env_upi_link.txt'):
+        path = os.path.join(_project_root(), fname)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding='utf-8') as fh:
+                for raw in fh:
+                    line = raw.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    if not key.startswith(prefixes):
+                        continue
+                    val = value.strip().strip('"').strip("'")
+                    if val and (not str(os.environ.get(key) or '').strip()):
+                        os.environ[key] = val
+        except Exception:
+            pass
 
 def resolve_upi_proxy() -> str:
     _load_env_file()
-    for key in ('UPI_LINK_PROXY', 'OPENAI_PAY_DEFAULT_PROXY'):
+    for key in ('PAYRAIL_PROXY_UPI', 'UPI_LINK_PROXY', 'PAYRAIL_PROXY', 'OPENAI_PAY_DEFAULT_PROXY'):
         val = str(os.environ.get(key) or '').strip()
         if val:
             return val
+    return DEFAULT_LOCAL_PROXY
+
+def resolve_rail_proxy(rail_id: str) -> str:
+    _load_env_file()
+    try:
+        from .rail_specs import get_spec
+    except ImportError:
+        from rail_specs import get_spec
+    spec = get_spec(rail_id)
+    rid = spec.rail_id.upper()
+    candidates = [f'PAYRAIL_PROXY_{rid}']
+    if spec.proxy_env_var:
+        candidates.append(spec.proxy_env_var)
+    candidates.extend(['PAYRAIL_PROXY', 'UPI_LINK_PROXY', 'OPENAI_PAY_DEFAULT_PROXY'])
+    for idx, key in enumerate(candidates):
+        val = str(os.environ.get(key) or '').strip()
+        if not val:
+            continue
+        # Dedicated rail-specific env var -> ensure country tag matches if rewritable, else use as-is
+        # Shared fallback (PAYRAIL_PROXY / UPI_LINK_PROXY) -> rewrite region when rewritable
+        rewritten = proxy_for_region(val, spec.country)
+        return rewritten or val
     return DEFAULT_LOCAL_PROXY
 
 def _load_chatgpt_rt_env_file() -> None:
@@ -437,13 +470,13 @@ def _rt_proxy_from_env() -> str:
         return _parse_rt_proxy_line(line)
     return ''
 
-def resolve_upi_promotion_proxy(base_proxy: str='') -> str:
+def resolve_upi_promotion_proxy(base_proxy: str='', *, promotion_region: str=PROMOTION_REGION) -> str:
     _load_env_file()
-    dedicated = str(os.environ.get('UPI_LINK_PROMOTION_PROXY') or '').strip()
+    dedicated = str(os.environ.get('PAYRAIL_PROMOTION_PROXY') or os.environ.get('UPI_LINK_PROMOTION_PROXY') or '').strip()
     if dedicated:
-        return proxy_for_region(dedicated, PROMOTION_REGION) or dedicated
+        return proxy_for_region(dedicated, promotion_region) or dedicated
     base = str(base_proxy or resolve_upi_proxy()).strip()
-    return proxy_for_region(base, PROMOTION_REGION) if base else ''
+    return proxy_for_region(base, promotion_region) if base else ''
 
 def _uses_lowercase_proxy_region(proxy: str) -> bool:
     text = str(proxy or '').strip().lower()
@@ -454,6 +487,9 @@ def proxy_for_region(proxy: str, region: str) -> str:
     region = str(region or '').strip()
     if not proxy or not region:
         return proxy
+    # DataImpulse-style gateway: __cr.<cc> or cr.<cc> country selector
+    if re.search(r'(?:__cr\.|(?:^|;)cr\.)[A-Za-z]{2}', proxy):
+        return re.sub(r'(__cr\.|(?:^|;)cr\.)[A-Za-z]{2}', rf'\g<1>{region.lower()}', proxy)
     region_val = region.lower() if _uses_lowercase_proxy_region(proxy) else region.upper()
     rewritten = re.sub('region-[A-Za-z]{2}', f'region-{region_val}', proxy)
     if region.upper() != 'JP':
@@ -513,14 +549,14 @@ def _refresh_access_token_from_session(session_token: str, proxy: str, device_id
     finally:
         session.close()
 
-def resolve_upi_access_token(raw: str, proxy: str='') -> str:
+def resolve_upi_access_token(raw: str, proxy: str='', *, region: str='IN') -> str:
     token = normalize_access_token(raw)
     if not token:
         return ''
     proxy_url = str(proxy or resolve_upi_proxy() or '').strip()
     if not proxy_url:
         return token
-    client = UpiHttpClient(proxy_url, region='IN')
+    client = UpiHttpClient(proxy_url, region=region)
     try:
         st, _, _ = client.request('GET', 'https://chatgpt.com/backend-api/me', headers=_chatgpt_headers(client, token), proxy=proxy_url)
         if st == 200:
@@ -585,15 +621,15 @@ def _jwt_email(token: str) -> str:
     email = str(data.get('email') or data.get('preferred_username') or '').strip()
     return email if '@' in email else 'buyer@example.com'
 
-def _fetch_promo_coupon_state(token: str, proxy: str) -> str:
-    client = _spawn_region_client(proxy, 'VN')
+def _fetch_promo_coupon_state(token: str, proxy: str, *, coupon: str=UPI_PROMO_COUPON, promo_region: str=PROMOTION_REGION) -> str:
+    client = _spawn_region_client(proxy, promo_region, promotion=True)
     try:
         headers = _chatgpt_headers(client, token, promotion=True)
         account_id = _jwt_account_id(token)
         if account_id:
             headers['ChatGPT-Account-Id'] = account_id
-        promo_proxy = client.base_proxy or resolve_upi_promotion_proxy(proxy)
-        url = f'https://chatgpt.com/backend-api/promo_campaign/check_coupon?coupon={UPI_PROMO_COUPON}&is_coupon_from_query_param=true'
+        promo_proxy = client.base_proxy or resolve_upi_promotion_proxy(proxy, promotion_region=promo_region)
+        url = f'https://chatgpt.com/backend-api/promo_campaign/check_coupon?coupon={coupon}&is_coupon_from_query_param=true'
         status, text, _ = client.request('GET', url, headers=headers, proxy=promo_proxy)
         if status >= 400:
             return 'unknown'
@@ -615,13 +651,13 @@ def _fetch_promo_coupon_state(token: str, proxy: str) -> str:
     finally:
         client.close()
 
-def _assert_upi_promo_eligible(token: str, proxy: str) -> None:
-    state = _fetch_promo_coupon_state(token, proxy)
-    if state in ('eligible', 'unknown'):
+def _assert_upi_promo_eligible(token: str, proxy: str, *, state: str | None=None, rail_id: str='upi') -> None:
+    resolved = state if state is not None else _fetch_promo_coupon_state(token, proxy)
+    if resolved in ('eligible', 'unknown'):
         return
-    if state == 'already_redeemed':
-        raise RuntimeError('upi promo already redeemed')
-    raise RuntimeError(f'upi promo not eligible: state={state}')
+    if resolved == 'already_redeemed':
+        raise RuntimeError(f'{rail_id} promo already redeemed')
+    raise RuntimeError(f'{rail_id} promo not eligible: state={resolved}')
 
 def _pick_india_chrome_profile() -> dict[str, Any]:
     order = list(IN_CHROME_PROFILES)
@@ -644,7 +680,7 @@ def _pick_india_chrome_profile() -> dict[str, Any]:
 
 class UpiHttpClient:
 
-    def __init__(self, proxy: str, *, region: str='IN'):
+    def __init__(self, proxy: str, *, region: str='IN', accept_language: str='', locale: str=''):
         self.base_proxy = str(proxy or '').strip()
         self.proxy = self.base_proxy
         self.region = str(region or 'IN').upper()
@@ -657,12 +693,9 @@ class UpiHttpClient:
         self.ua = f'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_full} Safari/537.36'
         self.sec_ch_ua = str(profile['sec_ch_ua'])
         self.sec_ch_ua_platform = '"Windows"'
-        if self.region == 'VN':
-            self.accept_language = VN_ACCEPT_LANGUAGE
-            self.locale = VN_BROWSER_LOCALE
-        else:
-            self.accept_language = IN_ACCEPT_LANGUAGE
-            self.locale = IN_BROWSER_LOCALE
+        default_accept, default_locale = COUNTRY_LOCALES.get(self.region, (IN_ACCEPT_LANGUAGE, IN_BROWSER_LOCALE))
+        self.accept_language = accept_language or default_accept
+        self.locale = locale or default_locale
         self.device_id = str(uuid.uuid4())
         self.session = curl_requests.Session(impersonate=self.impersonate)
         self.session.trust_env = False
@@ -708,15 +741,15 @@ def _chatgpt_headers(client: UpiHttpClient, token: str, *, promotion: bool=False
     browser_locale = VN_BROWSER_LOCALE if promotion else client.locale
     return {'user-agent': client.ua, 'accept': '*/*', 'accept-language': accept_language, 'authorization': f'Bearer {token}', 'origin': 'https://chatgpt.com', 'referer': 'https://chatgpt.com/', 'content-type': 'application/json', 'oai-device-id': client.device_id, 'oai-language': browser_locale, 'oai-session-id': str(uuid.uuid4()), 'oai-client-version': CHATGPT_CLIENT_VERSION, 'oai-client-build-number': CHATGPT_CLIENT_BUILD, 'sec-ch-ua': client.sec_ch_ua, 'sec-ch-ua-mobile': '?0', 'sec-ch-ua-platform': client.sec_ch_ua_platform, 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-origin', 'cookie': f'oai-did={client.device_id}'}
 
-def _spawn_region_client(base_proxy: str, region: str, *, fresh_sid: bool=False) -> UpiHttpClient:
+def _spawn_region_client(base_proxy: str, region: str, *, fresh_sid: bool=False, promotion: bool=False, accept_language: str='', locale: str='') -> UpiHttpClient:
     region = str(region or 'IN').upper()
-    if region == 'VN':
-        proxy = resolve_upi_promotion_proxy(base_proxy)
+    if promotion:
+        proxy = resolve_upi_promotion_proxy(base_proxy, promotion_region=region)
     else:
         proxy = proxy_for_region(base_proxy, region) or base_proxy
         if fresh_sid:
             proxy = _proxy_with_fresh_sid(proxy)
-    return UpiHttpClient(proxy, region=region)
+    return UpiHttpClient(proxy, region=region, accept_language=accept_language, locale=locale)
 
 def _warmup_india_client(client: UpiHttpClient, token: str, proxy: str) -> None:
     headers = _chatgpt_headers(client, token)
@@ -814,10 +847,10 @@ def _payment_method_types(payload: dict) -> list[str]:
     push(payload.get('payment_method_types'))
     return methods
 
-def _ensure_upi_offered(payload: dict, phase: str) -> None:
+def _ensure_payment_method_offered(payload: dict, spec: Any, phase: str) -> None:
     methods = _payment_method_types(payload)
-    if 'upi' not in methods:
-        raise RuntimeError(f"{phase} checkout does not offer upi (India-only); methods={','.join(methods) or 'none'}; need Indian egress proxy (region-IN) for checkout/provider stages")
+    if spec.payment_method_type not in methods:
+        raise RuntimeError(f"{phase} checkout does not offer {spec.payment_method_type} ({spec.country}); methods={','.join(methods) or 'none'}; need egress proxy (region-{spec.country}) for checkout/provider stages")
 
 def _json_or_error(status: int, text: str, label: str) -> dict:
     if status >= 400:
@@ -925,11 +958,11 @@ def _extract_redirect_url(payload: Any, spec: Any=None) -> str:
                 return found
     elif isinstance(payload, list):
         for item in payload:
-            found = _extract_redirect_url(item)
+            found = _extract_redirect_url(item, spec)
             if found:
                 return found
     elif isinstance(payload, str):
-        return _extract_upi_from_text(payload)
+        return _extract_rail_from_text(payload, spec)
     return ''
 
 def _confirm_requires_approval(payload: dict) -> bool:
@@ -952,21 +985,24 @@ def _stripe_confirm_return_url(cs_id: str, processor_entity: str, stripe_hosted_
 def _stripe_poll_form(stripe_pk: str) -> dict[str, str]:
     return {'elements_session_client[client_betas][0]': 'custom_checkout_server_updates_1', 'elements_session_client[client_betas][1]': 'custom_checkout_manual_approval_1', 'elements_session_client[elements_init_source]': 'custom_checkout', 'elements_session_client[referrer_host]': 'chatgpt.com', 'elements_session_client[session_id]': f'elements_session_{uuid.uuid4().hex[:11]}', 'elements_session_client[stripe_js_id]': str(uuid.uuid4()), 'elements_session_client[locale]': 'en', 'elements_session_client[is_aggregation_expected]': 'false', 'elements_options_client[saved_payment_method][enable_save]': 'never', 'elements_options_client[saved_payment_method][enable_redisplay]': 'never', 'key': stripe_pk, '_stripe_version': STRIPE_VERSION}
 
-def _stripe_init_form(stripe_pk: str) -> dict[str, str]:
+def _stripe_init_form(stripe_pk: str, spec: Any=None) -> dict[str, str]:
     form = _stripe_poll_form(stripe_pk)
-    form['browser_locale'] = 'en-IN'
-    form['browser_timezone'] = 'Asia/Kolkata'
+    form['browser_locale'] = spec.browser_locale if spec is not None else 'en-IN'
+    form['browser_timezone'] = spec.timezone if spec is not None else 'Asia/Kolkata'
     return form
 
 def extract_upi_link(access_token: str, proxy: str | None=None, *, job_id: str='', on_step: Any=None, spec: Any=None) -> dict[str, Any]:
-    from .rail_specs import UPI_SPEC
+    try:
+        from .rail_specs import UPI_SPEC
+    except ImportError:
+        from rail_specs import UPI_SPEC
     spec = spec or UPI_SPEC
-    proxy_url = str(proxy or resolve_upi_proxy() or '').strip()
+    proxy_url = str(proxy or resolve_rail_proxy(spec.rail_id) or '').strip()
     if not proxy_url:
         raise RuntimeError(f'proxy is required for {spec.rail_id} extraction')
     raw_session = str(access_token or '').strip()
     orig_token = normalize_access_token(raw_session)
-    token = resolve_upi_access_token(raw_session, proxy_url)
+    token = resolve_upi_access_token(raw_session, proxy_url, region=spec.country)
     if not token:
         raise ValueError('Access Token is required')
     steps: list[dict[str, str]] = []
@@ -984,7 +1020,7 @@ def extract_upi_link(access_token: str, proxy: str | None=None, *, job_id: str='
     for attempt in range(1, MAX_REBUILD_ATTEMPTS + 1):
         if attempt > 1:
             step('rebuild checkout', 'info', f'attempt {attempt}/{MAX_REBUILD_ATTEMPTS}')
-        client = UpiHttpClient(proxy_url, region=spec.country)
+        client = UpiHttpClient(proxy_url, region=spec.country, accept_language=spec.accept_language, locale=spec.browser_locale)
         try:
             result = _run_upi_attempt(client, token, step, steps, spec=spec)
             result['steps'] = steps
@@ -1038,26 +1074,28 @@ def _run_upi_attempt(client: UpiHttpClient, token: str, step: Any, steps: list[d
     _ensure_payment_method_offered(init, spec, f'{spec.country} bootstrap')
     step('stripe init', 'ok', f"amount={_expected_amount(init)}; methods={','.join(_payment_method_types(init))}")
     _human_pause('med')
-    if spec.promotion_region:
-        vn_client = _spawn_region_client(india_base, spec.promotion_region)
-        promotion_proxy = vn_client.base_proxy or resolve_upi_promotion_proxy(india_base)
+    promo_region = spec.resolve_promotion_region()
+    promo_campaign = spec.resolve_promo_campaign()
+    if promo_region and promo_campaign:
+        vn_client = _spawn_region_client(india_base, promo_region, promotion=True)
+        promotion_proxy = vn_client.base_proxy or resolve_upi_promotion_proxy(india_base, promotion_region=promo_region)
         promo_headers = _chatgpt_headers(vn_client, token, promotion=True)
-        step(f'{spec.promotion_region} promo fingerprint', 'ok', f'{spec.promotion_region} chrome TLS={vn_client.impersonate}; locale={vn_client.locale}; did={vn_client.device_id[:8]}; proxy={_mask_proxy_summary(promotion_proxy)}')
+        step(f'{promo_region} promo fingerprint', 'ok', f'{promo_region} chrome TLS={vn_client.impersonate}; locale={vn_client.locale}; did={vn_client.device_id[:8]}; proxy={_mask_proxy_summary(promotion_proxy)}')
         _human_pause('short')
         referer = f'https://chatgpt.com/checkout/{processor_entity}/{cs_id}'
-        promo_body = {'checkout_session_id': cs_id, 'processor_entity': processor_entity, 'plan_name': 'chatgptplusplan', 'price_interval': 'month', 'seat_quantity': 1, 'promo_campaign': {'promo_campaign_id': spec.promo_campaign_id, 'is_coupon_from_query_param': False}}
+        promo_body = {'checkout_session_id': cs_id, 'processor_entity': processor_entity, 'plan_name': checkout_body['plan_name'], 'price_interval': 'month', 'seat_quantity': 1, 'promo_campaign': {'promo_campaign_id': promo_campaign, 'is_coupon_from_query_param': False}}
         try:
             st, text, _ = vn_client.request('POST', 'https://chatgpt.com/backend-api/payments/checkout/update', headers=_target_headers(promo_headers, '/backend-api/payments/checkout/update', referer), json_body=promo_body, proxy=promotion_proxy)
             promo = _json_or_error(st, text, 'checkout promotion update')
             if promo.get('success') is False:
                 raise RuntimeError(f'promotion update rejected: {text[:200]}')
-            step(f'{spec.promotion_region} promotion update', 'ok', f'checkout/update via {spec.promotion_region} IP succeeded')
+            step(f'{promo_region} promotion update', 'ok', f'checkout/update via {promo_region} IP succeeded')
         finally:
             vn_client.close()
-        step('region handoff', 'info', f'cooling down after {spec.promotion_region} promo; spawning fresh {spec.country} identity')
+        step('region handoff', 'info', f'cooling down after {promo_region} promo; spawning fresh {spec.country} identity')
         _human_pause('handoff')
         client.close()
-        india = _spawn_region_client(india_base, spec.country, fresh_sid=True)
+        india = _spawn_region_client(india_base, spec.country, fresh_sid=True, accept_language=spec.accept_language, locale=spec.browser_locale)
         try:
             return _run_upi_india_phase(india, token=token, step=step, steps=steps, cs_id=cs_id, processor_entity=processor_entity, stripe_pk=stripe_pk, stripe_init=stripe_init, referer=referer, india_base=india_base, spec=spec)
         finally:
@@ -1067,7 +1105,7 @@ def _run_upi_attempt(client: UpiHttpClient, token: str, step: Any, steps: list[d
 
 def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps: list[dict[str, str]], cs_id: str, processor_entity: str, stripe_pk: str, stripe_init: Any, referer: str, india_base: str, spec: Any) -> dict[str, Any]:
     provider_proxy = client.base_proxy or proxy_for_region(india_base, spec.country) or india_base
-    approve_proxy = proxy_for_region(india_base, APPROVE_REGION) or provider_proxy
+    approve_proxy = proxy_for_region(india_base, spec.country) or provider_proxy
     headers = _chatgpt_headers(client, token)
     step(f'{spec.country} reentry fingerprint', 'ok', f'{spec.country} chrome TLS={client.impersonate}; locale={client.locale}; did={client.device_id[:8]}; proxy={_mask_proxy_summary(provider_proxy)}')
     _warmup_india_client(client, token, provider_proxy)
@@ -1075,8 +1113,9 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
     _human_pause('med')
     init = stripe_init(client, provider_proxy)
     amount = _expected_amount(init)
-    _ensure_payment_method_offered(init, spec, f'{spec.country} reentry after promo')
-    if amount > AMOUNT_POLICY_MAX:
+    amount_max = spec.resolve_amount_max()
+    _ensure_payment_method_offered(init, spec, f'{spec.country} reentry')
+    if amount_max is not None and amount > amount_max:
         raise RuntimeError(f'{spec.rail_id} promo not eligible: amount policy failed after promotion: amount={amount}')
     step(f'{spec.country} reentry Stripe init', 'ok', f'amount={amount}')
     _human_pause('med')
@@ -1093,7 +1132,7 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
     init = stripe_init(client, provider_proxy)
     amount = _expected_amount(init)
     _ensure_payment_method_offered(init, spec, 'tax refresh')
-    if amount > AMOUNT_POLICY_MAX:
+    if amount_max is not None and amount > amount_max:
         raise RuntimeError(f'{spec.rail_id} promo not eligible: amount policy failed after tax sync: amount={amount}')
     step(f'{spec.rail_id} tax Stripe init', 'ok', f'amount={amount}')
     _human_pause('med')
@@ -1155,7 +1194,7 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
             raise RuntimeError(f'chatgpt approve failed after retries: {last_approve_detail}')
     if not stripe_redirect:
         stripe_redirect = _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, spec=spec)
-    long_url = _resolve_external_redirect(client, stripe_redirect, provider_proxy) or stripe_redirect
+    long_url = _resolve_external_redirect(client, stripe_redirect, provider_proxy, spec=spec) or stripe_redirect
     step('provider redirect', 'ok', long_url)
     return {'success': True, 'ok': True, 'long_url': long_url, 'cs_id': cs_id, 'billing_country': spec.country, 'currency': spec.currency, 'payment_method_id': pm_id, 'amount': amount, 'rail_id': spec.rail_id}
 
@@ -1197,12 +1236,12 @@ def _poll_stripe_redirect(client: UpiHttpClient, cs_id: str, stripe_pk: str, ste
         return ''
     raise RuntimeError(f'redirect url resolution timeout after {attempts} poll(s): {last_summary}')
 
-def _resolve_external_redirect(client: UpiHttpClient, redirect_url: str, provider_proxy: str) -> str:
+def _resolve_external_redirect(client: UpiHttpClient, redirect_url: str, provider_proxy: str, *, spec: Any=None) -> str:
     current = str(redirect_url or '').strip()
     for _ in range(5):
         if not current:
             break
-        if _is_upi_url(current):
+        if _is_rail_url(current, spec):
             return current
         st, text, hdrs = client.request('GET', current, headers=_stripe_headers(client), allow_redirects=False, proxy=provider_proxy)
         try:
@@ -1215,17 +1254,29 @@ def _resolve_external_redirect(client: UpiHttpClient, redirect_url: str, provide
         location = hdrs.get('location', '')
         if st in (301, 302, 303, 307, 308) and location:
             current = urljoin(current, location)
-            if _is_upi_url(current):
+            if _is_rail_url(current, spec):
                 return current
             continue
         break
     return ''
 
-def _run_job(job_id: str, access_token: str, proxy: str, user_id: str) -> None:
+def _run_job(job_id: str, access_token: str, proxy: str, user_id: str, *, spec: Any=None) -> None:
     from .upi_link_admin_service import finalize_upi_link_record
     from .portal_tools_service import sanitize_upi_extract_message
-    promo_proxy = resolve_upi_promotion_proxy(proxy)
-    debug_ctx = {'checkout_region': CHECKOUT_REGION, 'promotion_region': PROMOTION_REGION, 'provider_region': PROVIDER_REGION, 'india_proxy': _mask_proxy_summary(proxy_for_region(proxy, CHECKOUT_REGION)), 'promotion_proxy': _mask_proxy_summary(promo_proxy), 'tls_impersonate': 'chrome-in', 'human_delay': True}
+    from .rail_specs import UPI_SPEC
+    spec = spec or UPI_SPEC
+    promo_region = spec.resolve_promotion_region()
+    promo_proxy = resolve_upi_promotion_proxy(proxy, promotion_region=promo_region) if promo_region else ''
+    debug_ctx = {
+        'rail_id': spec.rail_id,
+        'checkout_region': spec.country,
+        'promotion_region': promo_region or '',
+        'provider_region': spec.country,
+        'proxy': _mask_proxy_summary(proxy_for_region(proxy, spec.country)),
+        'promotion_proxy': _mask_proxy_summary(promo_proxy),
+        'tls_impersonate': f'chrome-{spec.country.lower()}',
+        'human_delay': True,
+    }
     steps_snapshot: list[dict[str, str]] = []
 
     def step_hook(steps: list[dict[str, str]]) -> None:
@@ -1237,44 +1288,71 @@ def _run_job(job_id: str, access_token: str, proxy: str, user_id: str) -> None:
     try:
         lock_fd = _acquire_extract_slot(job_id)
         _queue_set_active(job_id)
-        output = extract_upi_link(access_token, proxy=proxy, job_id=job_id, on_step=step_hook)
+        output = extract_upi_link(access_token, proxy=proxy, job_id=job_id, on_step=step_hook, spec=spec)
         steps = output.get('steps') or steps_snapshot
-        finalize_upi_link_record(job_id, status='completed', long_url=str(output.get('long_url') or '').strip(), currency=str(output.get('currency') or 'INR'), result_message='', steps_json=json.dumps(steps, ensure_ascii=False), debug_json=json.dumps({**debug_ctx, 'amount': output.get('amount')}, ensure_ascii=False), amount=output.get('amount'))
-        _write_debug_artifact(job_id, {'job_id': job_id, 'status': 'completed', 'steps': steps, 'debug': debug_ctx, 'output': output, 'updated_at': time.time()})
+        finalize_upi_link_record(job_id, status='completed', rail_id=spec.rail_id, long_url=str(output.get('long_url') or '').strip(), currency=str(output.get('currency') or spec.currency), result_message='', steps_json=json.dumps(steps, ensure_ascii=False), debug_json=json.dumps({**debug_ctx, 'amount': output.get('amount')}, ensure_ascii=False), amount=output.get('amount'))
+        _write_debug_artifact(job_id, {'job_id': job_id, 'rail_id': spec.rail_id, 'status': 'completed', 'steps': steps, 'debug': debug_ctx, 'output': output, 'updated_at': time.time()})
         _patch_job(job_id, status='completed', output=output, error='')
     except Exception as exc:
         job = _get_job(job_id) or {}
         steps = steps_snapshot or ((job.get('output') or {}).get('steps') if isinstance(job.get('output'), dict) else []) or []
         raw = sanitize_upi_extract_message(exc)
         fail_stage = _infer_fail_stage(steps, raw)
-        finalize_upi_link_record(job_id, status='failed', result_message=raw, result_message_raw=raw, steps_json=json.dumps(steps, ensure_ascii=False), debug_json=json.dumps(debug_ctx, ensure_ascii=False), fail_stage=fail_stage)
-        _write_debug_artifact(job_id, {'job_id': job_id, 'status': 'failed', 'error': raw, 'fail_stage': fail_stage, 'steps': steps, 'debug': debug_ctx, 'updated_at': time.time()})
+        finalize_upi_link_record(job_id, status='failed', rail_id=spec.rail_id, currency=spec.currency, result_message=raw, result_message_raw=raw, steps_json=json.dumps(steps, ensure_ascii=False), debug_json=json.dumps(debug_ctx, ensure_ascii=False), fail_stage=fail_stage)
+        _write_debug_artifact(job_id, {'job_id': job_id, 'rail_id': spec.rail_id, 'status': 'failed', 'error': raw, 'fail_stage': fail_stage, 'steps': steps, 'debug': debug_ctx, 'updated_at': time.time()})
         _patch_job(job_id, status='failed', error=raw, output={'steps': steps})
     finally:
         _release_extract_slot(lock_fd)
         _queue_unregister(job_id)
 
-def start_upi_link_extract(access_token: str, *, user_id: str='') -> dict[str, Any]:
+def start_rail_extract(rail_id: str, access_token: str, *, user_id: str='', proxy: str='') -> dict[str, Any]:
     from .upi_link_admin_service import insert_upi_link_record
+    from .rail_specs import get_spec
+    spec = get_spec(rail_id)
     raw_session = str(access_token or '').strip()
-    proxy = resolve_upi_proxy()
-    token = resolve_upi_access_token(raw_session, proxy)
+    resolved_proxy = str(proxy or resolve_rail_proxy(spec.rail_id) or '').strip()
+    if not resolved_proxy:
+        return {'success': False, 'error': f'proxy is required for {spec.rail_id} extraction ({spec.proxy_env_var or "PAYRAIL_PROXY"})'}
+    token = resolve_upi_access_token(raw_session, resolved_proxy, region=spec.country)
     if not token:
         return {'success': False, 'error': 'Please paste a valid accessToken or session JSON'}
     email = _jwt_email(token)
-    promo_state = _fetch_promo_coupon_state(token, proxy)
-    try:
-        _assert_upi_promo_eligible(token, proxy)
-    except Exception as exc:
-        fail_id = uuid.uuid4().hex
-        insert_upi_link_record(job_id=fail_id, user_id=user_id, email=email, promo_state=promo_state, status='failed', result_message=str(exc), result_message_raw=str(exc), fail_stage='precheck')
-        return {'success': False, 'error': str(exc)}
+    promo_campaign = spec.resolve_promo_campaign()
+    promo_region = spec.resolve_promotion_region()
+    promo_state = ''
+    if promo_campaign and promo_region:
+        promo_state = _fetch_promo_coupon_state(token, resolved_proxy, coupon=promo_campaign, promo_region=promo_region)
+        try:
+            _assert_upi_promo_eligible(token, resolved_proxy, state=promo_state, rail_id=spec.rail_id)
+        except Exception as exc:
+            fail_id = uuid.uuid4().hex
+            insert_upi_link_record(job_id=fail_id, rail_id=spec.rail_id, user_id=user_id, email=email, promo_state=promo_state, currency=spec.currency, status='failed', result_message=str(exc), result_message_raw=str(exc), fail_stage='precheck')
+            return {'success': False, 'error': str(exc)}
     job_id = uuid.uuid4().hex
     now = time.time()
-    insert_upi_link_record(job_id=job_id, user_id=user_id, email=email, promo_state=promo_state, status='processing', debug_json=json.dumps({'checkout_region': CHECKOUT_REGION, 'promotion_region': PROMOTION_REGION, 'india_proxy': _mask_proxy_summary(proxy_for_region(proxy, CHECKOUT_REGION)), 'promotion_proxy': _mask_proxy_summary(resolve_upi_promotion_proxy(proxy))}, ensure_ascii=False))
-    _set_job({'job_id': job_id, 'status': 'processing', 'user_id': str(user_id or ''), 'error': '', 'output': None, 'created_at': now, 'updated_at': now})
-    threading.Thread(target=_run_job, args=(job_id, raw_session, proxy, user_id), daemon=True, name=f'upi-link-{job_id[:8]}').start()
-    return {'success': True, 'job_id': job_id, 'status': 'processing', **get_upi_queue_snapshot(job_id)}
+    promo_proxy_masked = _mask_proxy_summary(resolve_upi_promotion_proxy(resolved_proxy, promotion_region=promo_region)) if promo_region else ''
+    insert_upi_link_record(
+        job_id=job_id,
+        rail_id=spec.rail_id,
+        user_id=user_id,
+        email=email,
+        promo_state=promo_state,
+        currency=spec.currency,
+        status='processing',
+        debug_json=json.dumps({
+            'rail_id': spec.rail_id,
+            'checkout_region': spec.country,
+            'promotion_region': promo_region or '',
+            'proxy': _mask_proxy_summary(proxy_for_region(resolved_proxy, spec.country)),
+            'promotion_proxy': promo_proxy_masked,
+        }, ensure_ascii=False),
+    )
+    _set_job({'job_id': job_id, 'rail_id': spec.rail_id, 'status': 'processing', 'user_id': str(user_id or ''), 'error': '', 'output': None, 'created_at': now, 'updated_at': now})
+    threading.Thread(target=_run_job, args=(job_id, raw_session, resolved_proxy, user_id), kwargs={'spec': spec}, daemon=True, name=f'payrail-{spec.rail_id}-{job_id[:8]}').start()
+    return {'success': True, 'job_id': job_id, 'rail_id': spec.rail_id, 'status': 'processing', **get_upi_queue_snapshot(job_id)}
+
+def start_upi_link_extract(access_token: str, *, user_id: str='') -> dict[str, Any]:
+    return start_rail_extract('upi', access_token, user_id=user_id)
 
 def get_upi_link_status(job_id: str, *, user_id: str='') -> dict[str, Any]:
     jid = str(job_id or '').strip()
@@ -1292,12 +1370,13 @@ def get_upi_link_status(job_id: str, *, user_id: str='') -> dict[str, Any]:
         return {'success': False, 'error': 'Job not found or expired'}
     status = str(job.get('status') or 'processing')
     from .portal_tools_service import sanitize_upi_extract_message
-    payload: dict[str, Any] = {'success': True, 'job_id': jid, 'status': status, 'error': sanitize_upi_extract_message(job.get('error'))}
+    payload: dict[str, Any] = {'success': True, 'job_id': jid, 'rail_id': str(job.get('rail_id') or 'upi'), 'status': status, 'error': sanitize_upi_extract_message(job.get('error'))}
     if status == 'processing':
         payload.update(get_upi_queue_snapshot(jid))
     output = job.get('output')
     if isinstance(output, dict):
         payload['long_url'] = output.get('long_url') or ''
         payload['currency'] = output.get('currency') or 'INR'
+        payload['rail_id'] = str(output.get('rail_id') or payload['rail_id'])
         payload['steps'] = output.get('steps') if isinstance(output.get('steps'), list) else []
     return payload

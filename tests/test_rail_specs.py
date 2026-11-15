@@ -85,18 +85,41 @@ def test_registry_has_all_rails():
 
 
 def test_rails_require_proxy():
+    import tempfile
     # With no proxy configured anywhere, every rail must fail fast with a clear error
-    for var in ("IDEAL_LINK_PROXY", "PIX_LINK_PROXY", "GOPAY_LINK_PROXY", "MOMO_LINK_PROXY", "UPI_LINK_PROXY"):
-        os.environ.pop(var, None)
-    bootstrap_default_rails()
-    for rail_id in ("ideal", "pix", "gopay", "momo"):
+    with tempfile.TemporaryDirectory() as empty_root:
+        prev_root = os.environ.get("VERIFY_APP_ROOT")
+        os.environ["VERIFY_APP_ROOT"] = empty_root
+        for var in (
+            "IDEAL_LINK_PROXY", "PIX_LINK_PROXY", "GOPAY_LINK_PROXY", "MOMO_LINK_PROXY", "UPI_LINK_PROXY",
+            "PAYRAIL_PROXY", "PAYRAIL_PROXY_IDEAL", "PAYRAIL_PROXY_PIX", "PAYRAIL_PROXY_GOPAY",
+            "PAYRAIL_PROXY_MOMO", "PAYRAIL_PROXY_UPI", "OPENAI_PAY_DEFAULT_PROXY",
+        ):
+            os.environ.pop(var, None)
         try:
-            get_rail(rail_id).start_extract("dummy-token")
-        except RuntimeError as exc:
-            assert "proxy is required" in str(exc), f"{rail_id}: {exc}"
-        else:
-            raise AssertionError(f"{rail_id}: expected RuntimeError for missing proxy")
-    RAILS.clear()
+            bootstrap_default_rails()
+            for rail_id in ("upi", "ideal", "pix", "gopay", "momo"):
+                res = get_rail(rail_id).start_extract("dummy-token")
+                assert res.get("success") is False, f"{rail_id}: {res}"
+                assert "proxy is required" in res.get("error", ""), f"{rail_id}: {res}"
+
+            from api_python.ideal_link_service import extract_ideal_link
+            from api_python.pix_link_service import extract_pix_link
+            from api_python.gopay_link_service import extract_gopay_link
+            from api_python.momo_link_service import extract_momo_link
+            for fn in (extract_ideal_link, extract_pix_link, extract_gopay_link, extract_momo_link):
+                try:
+                    fn("dummy-token")
+                except RuntimeError as exc:
+                    assert "proxy is required" in str(exc)
+                else:
+                    raise AssertionError(f"{fn.__name__}: expected RuntimeError for missing proxy")
+        finally:
+            if prev_root is None:
+                os.environ.pop("VERIFY_APP_ROOT", None)
+            else:
+                os.environ["VERIFY_APP_ROOT"] = prev_root
+            RAILS.clear()
 
 
 if __name__ == "__main__":

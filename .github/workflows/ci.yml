@@ -36,6 +36,7 @@ jobs:
           python tests/test_masking.py
           python tests/test_rails.py
           python tests/test_rail_specs.py
+          python tests/test_universal_engine.py
 
       - name: Import smoke (FastAPI app constructs with env set)
         run: |

@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS upi_link_extractions (
     id TEXT PRIMARY KEY,
     job_id TEXT NOT NULL UNIQUE,
+    rail_id TEXT NOT NULL DEFAULT 'upi',
     user_id TEXT NOT NULL DEFAULT '',
     email TEXT NOT NULL DEFAULT '',
     promo_state TEXT NOT NULL DEFAULT '',
@@ -60,6 +61,17 @@ def get_primary_db() -> sqlite3.Connection:
 def init_database() -> None:
     with get_primary_db() as conn:
         conn.executescript(SCHEMA)
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(upi_link_extractions)").fetchall()
+        }
+        if "rail_id" not in cols:
+            conn.execute(
+                "ALTER TABLE upi_link_extractions ADD COLUMN rail_id TEXT NOT NULL DEFAULT 'upi'"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_upi_extractions_rail ON upi_link_extractions(rail_id, created_at DESC)"
+        )
         conn.execute(
             "INSERT OR IGNORE INTO settings (id, content) VALUES (?, ?)",
             ("upi_link_submit_override", "online"),

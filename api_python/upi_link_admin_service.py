@@ -61,6 +61,7 @@ def set_upi_link_submit_override(mode: str) -> str:
 def insert_upi_link_record(
     *,
     job_id: str,
+    rail_id: str = "upi",
     user_id: str = "",
     email: str = "",
     promo_state: str = "",
@@ -75,6 +76,7 @@ def insert_upi_link_record(
     amount: int | None = None,
 ) -> str:
     record_id = str(job_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
+    normalized_rail = str(rail_id or "upi").strip().lower()[:32] or "upi"
     normalized_status = str(status or "processing").strip().lower()
     if normalized_status not in {"processing", "completed", "failed"}:
         normalized_status = "processing"
@@ -85,11 +87,12 @@ def insert_upi_link_record(
         conn.execute(
             """
             INSERT INTO upi_link_extractions
-                (id, job_id, user_id, email, promo_state, status, long_url,
+                (id, job_id, rail_id, user_id, email, promo_state, status, long_url,
                  long_url_masked, currency, result_message, result_message_raw,
                  steps_json, debug_json, fail_stage, amount)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
+                rail_id = excluded.rail_id,
                 user_id = excluded.user_id,
                 email = excluded.email,
                 promo_state = excluded.promo_state,
@@ -108,6 +111,7 @@ def insert_upi_link_record(
             (
                 record_id,
                 record_id,
+                normalized_rail,
                 str(user_id or "")[:128],
                 str(email or "")[:255],
                 str(promo_state or "")[:32],
@@ -131,6 +135,7 @@ def finalize_upi_link_record(
     job_id: str,
     *,
     status: str,
+    rail_id: str | None = None,
     long_url: str = "",
     currency: str = "INR",
     result_message: str = "",
@@ -150,49 +155,80 @@ def finalize_upi_link_record(
     message = sanitize_upi_extract_message(result_message or raw)[:512]
     url = str(long_url or "").strip()
     with get_primary_db() as conn:
-        conn.execute(
-            """
-            UPDATE upi_link_extractions
-            SET status = ?, long_url = ?, long_url_masked = ?, currency = ?,
-                result_message = ?, result_message_raw = ?, steps_json = ?,
-                debug_json = ?, fail_stage = ?, amount = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (
-                normalized_status,
-                url or None,
-                _mask_url(url),
-                str(currency or "INR")[:8] or "INR",
-                message,
-                raw[:8000] or None,
-                str(steps_json or "") or None,
-                str(debug_json or "") or None,
-                str(fail_stage or "")[:64],
-                amount,
-                record_id,
-            ),
-        )
+        if rail_id:
+            normalized_rail = str(rail_id).strip().lower()[:32] or "upi"
+            conn.execute(
+                """
+                UPDATE upi_link_extractions
+                SET rail_id = ?, status = ?, long_url = ?, long_url_masked = ?, currency = ?,
+                    result_message = ?, result_message_raw = ?, steps_json = ?,
+                    debug_json = ?, fail_stage = ?, amount = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    normalized_rail,
+                    normalized_status,
+                    url or None,
+                    _mask_url(url),
+                    str(currency or "INR")[:8] or "INR",
+                    message,
+                    raw[:8000] or None,
+                    str(steps_json or "") or None,
+                    str(debug_json or "") or None,
+                    str(fail_stage or "")[:64],
+                    amount,
+                    record_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE upi_link_extractions
+                SET status = ?, long_url = ?, long_url_masked = ?, currency = ?,
+                    result_message = ?, result_message_raw = ?, steps_json = ?,
+                    debug_json = ?, fail_stage = ?, amount = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    normalized_status,
+                    url or None,
+                    _mask_url(url),
+                    str(currency or "INR")[:8] or "INR",
+                    message,
+                    raw[:8000] or None,
+                    str(steps_json or "") or None,
+                    str(debug_json or "") or None,
+                    str(fail_stage or "")[:64],
+                    amount,
+                    record_id,
+                ),
+            )
         conn.commit()
 
 
-def list_upi_link_records(*, search: str = "", limit: int = 80, offset: int = 0) -> dict[str, Any]:
+def list_upi_link_records(*, search: str = "", rail: str = "", limit: int = 80, offset: int = 0) -> dict[str, Any]:
     term = str(search or "").strip()[:128]
+    rail_filter = str(rail or "").strip().lower()[:32]
     limit = min(max(int(limit), 1), 200)
     offset = max(int(offset), 0)
     where = "1 = 1"
     params: list[Any] = []
+    if rail_filter:
+        where += " AND rail_id = ?"
+        params.append(rail_filter)
     if term:
-        where += " AND (email LIKE ? OR user_id LIKE ? OR id LIKE ? OR result_message LIKE ?)"
+        where += " AND (email LIKE ? OR user_id LIKE ? OR id LIKE ? OR rail_id LIKE ? OR result_message LIKE ?)"
         like = f"%{term}%"
-        params.extend([like, like, like, like])
+        params.extend([like, like, like, like, like])
     with get_primary_db() as conn:
         total_row = conn.execute(
             f"SELECT COUNT(*) AS cnt FROM upi_link_extractions WHERE {where}", params
         ).fetchone()
         rows = conn.execute(
             f"""
-            SELECT id, job_id, user_id, email, promo_state, status, long_url,
+            SELECT id, job_id, rail_id, user_id, email, promo_state, status, long_url,
                    long_url_masked, currency, result_message, result_message_raw,
                    steps_json, debug_json, fail_stage, amount,
                    CAST(strftime('%s', created_at) AS INTEGER) * 1000 AS timestamp
@@ -219,6 +255,7 @@ def list_upi_link_records(*, search: str = "", limit: int = 80, offset: int = 0)
             {
                 "id": item.get("id"),
                 "job_id": item.get("job_id") or item.get("id"),
+                "rail_id": item.get("rail_id") or "upi",
                 "user_id": item.get("user_id") or "",
                 "email": item.get("email") or "",
                 "promo_state": item.get("promo_state") or "",
