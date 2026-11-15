@@ -43,7 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_upi_extractions_status
 
 def _database_path() -> Path:
     root = Path(os.environ.get("VERIFY_APP_ROOT") or Path(__file__).resolve().parents[1])
-    return Path(os.environ.get("PAYRAIL_DATABASE") or os.environ.get("CHATUPI_DATABASE") or root / "data" / "chatupi.sqlite3")
+    return Path(os.environ.get("PAYRAIL_DATABASE") or root / "data" / "payrail.sqlite3")
 
 
 def get_primary_db() -> sqlite3.Connection:

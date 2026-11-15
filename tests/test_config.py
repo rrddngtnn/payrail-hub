@@ -1,4 +1,4 @@
-"""Tests for api_python.config — PAYRAIL_* / CHATUPI_* precedence resolution."""
+"""Tests for api_python.config — PAYRAIL_* environment resolution."""
 from __future__ import annotations
 
 import importlib
@@ -9,13 +9,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from api_python import config  # noqa: E402
 
-LEGACY = "CHATUPI_"
 CANON = "PAYRAIL_"
 
 
 def _clear(name: str):
-    os.environ.pop(f"{LEGACY}{name}", None)
     os.environ.pop(f"{CANON}{name}", None)
+    os.environ.pop("CHATUPI_" + name, None)  # defensive: legacy name must never resolve
 
 
 def _reload():
@@ -25,7 +24,7 @@ def _reload():
 def test_default_when_both_unset():
     _clear("BASE_PATH")
     cfg = _reload()
-    assert cfg.base_path() == "/CHATUPI"
+    assert cfg.base_path() == "/payrail"
     assert cfg.retention_days() == 30
     assert cfg.hourly_limit() == 10
     assert cfg.allowed_hosts() == "localhost,127.0.0.1"
@@ -33,19 +32,11 @@ def test_default_when_both_unset():
     assert cfg.secret_key() == ""
 
 
-def test_legacy_chatupi_still_works():
+def test_legacy_chatupi_names_ignored():
     _clear("BASE_PATH")
-    os.environ[f"{LEGACY}BASE_PATH"] = "/LEGACY"
+    os.environ["CHATUPI_BASE_PATH"] = "/LEGACY"
     cfg = _reload()
-    assert cfg.base_path() == "/LEGACY"
-
-
-def test_payrail_wins_over_legacy():
-    _clear("BASE_PATH")
-    os.environ[f"{LEGACY}BASE_PATH"] = "/LEGACY"
-    os.environ[f"{CANON}BASE_PATH"] = "/NEW"
-    cfg = _reload()
-    assert cfg.base_path() == "/NEW"
+    assert cfg.base_path() == "/payrail"  # legacy name has no effect
 
 
 def test_int_parsing_and_bad_values():
@@ -70,8 +61,8 @@ def test_bool_parsing():
 def test_whitespace_only_values_ignored():
     _clear("SECRET_KEY")
     os.environ[f"{CANON}SECRET_KEY"] = "   "
-    os.environ[f"{LEGACY}SECRET_KEY"] = "legacy-key-value"
-    assert _reload().secret_key() == "legacy-key-value"
+    os.environ["CHATUPI_SECRET_KEY"] = "legacy-key-value"
+    assert _reload().secret_key() == ""  # whitespace ignored, legacy name not consulted
     _clear("SECRET_KEY")
 
 
@@ -79,7 +70,7 @@ def test_database_path_falls_back_to_repo_layout():
     _clear("DATABASE")
     from pathlib import Path
     root = Path("/tmp/fake-root")
-    assert config.database_path(root) == "/tmp/fake-root/data/chatupi.sqlite3"
+    assert config.database_path(root) == "/tmp/fake-root/data/payrail.sqlite3"
     os.environ[f"{CANON}DATABASE"] = "/custom/db.sqlite3"
     assert config.database_path(root) == "/custom/db.sqlite3"
     _clear("DATABASE")
@@ -87,8 +78,6 @@ def test_database_path_falls_back_to_repo_layout():
 
 def test_password_hash_resolution():
     _clear("PASSWORD_HASH")
-    os.environ[f"{LEGACY}PASSWORD_HASH"] = "pbkdf2_sha256$legacy"
-    assert _reload().password_hash() == "pbkdf2_sha256$legacy"
     os.environ[f"{CANON}PASSWORD_HASH"] = "pbkdf2_sha256$new"
     assert _reload().password_hash() == "pbkdf2_sha256$new"
     _clear("PASSWORD_HASH")

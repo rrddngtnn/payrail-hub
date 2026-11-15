@@ -80,9 +80,9 @@ async def _cleanup_loop() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if len(SECRET_KEY) < 48:
-        raise RuntimeError("PAYRAIL_SECRET_KEY (or legacy CHATUPI_SECRET_KEY) is missing or too short")
+        raise RuntimeError("PAYRAIL_SECRET_KEY is missing or too short")
     if not configured_password_hash().startswith("pbkdf2_sha256$"):
-        raise RuntimeError("PAYRAIL_PASSWORD_HASH (or legacy CHATUPI_PASSWORD_HASH) is missing or invalid")
+        raise RuntimeError("PAYRAIL_PASSWORD_HASH is missing or invalid")
     init_database()
     recover_stale_upi_records(max_age_sec=360)
     cleanup_database(RETENTION_DAYS)
@@ -96,7 +96,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="CHATUPI",
+    title="PayRail Hub",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -105,7 +105,7 @@ app = FastAPI(
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY or "startup-validation-will-reject-this-value",
-    session_cookie="chatupi_session",
+    session_cookie="payrail_session",
     max_age=8 * 3600,
     path=BASE_PATH or "/",
     same_site="strict",
@@ -128,7 +128,7 @@ async def http_error(_: Request, exc: HTTPException) -> JSONResponse:
 async def healthz() -> dict:
     with get_primary_db() as conn:
         conn.execute("SELECT 1").fetchone()
-    return {"ok": True, "service": "chatupi"}
+    return {"ok": True, "service": "payrail"}
 
 
 @app.get("/login", response_class=HTMLResponse)

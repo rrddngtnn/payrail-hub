@@ -1,10 +1,8 @@
 """Configuration resolution for PayRail Hub.
 
-Reads PAYRAIL_* environment variables, falling back to legacy CHATUPI_*
-names for existing deployments. A helper `_cfg()` centralizes resolution
-so rail services and admin tooling share one precedence rule:
-
-    explicit PAYRAIL_<NAME>  >  legacy CHATUPI_<NAME>  >  default
+Reads PAYRAIL_* environment variables with sensible defaults. A helper
+`_cfg()` centralizes resolution so rail services and admin tooling share
+one precedence rule: PAYRAIL_<NAME> > default.
 """
 from __future__ import annotations
 
@@ -12,12 +10,8 @@ import os
 
 
 def _cfg(name: str, default: str = "") -> str:
-    """Resolve PAYRAIL_<NAME>, then legacy CHATUPI_<NAME>, then default."""
-    val = os.environ.get(f"PAYRAIL_{name}", "").strip()
-    if val:
-        return val
-    val = os.environ.get(f"CHATUPI_{name}", "").strip()
-    return val or default
+    """Resolve PAYRAIL_<NAME> from the environment, else default."""
+    return os.environ.get(f"PAYRAIL_{name}", "").strip() or default
 
 
 def cfg_int(name: str, default: int) -> int:
@@ -45,12 +39,12 @@ def app_root() -> str:
 
 
 def database_path(root) -> str:
-    """SQLite path; PAYRAIL_DATABASE > CHATUPI_DATABASE > <root>/data/chatupi.sqlite3."""
-    return _cfg("DATABASE") or str(root / "data" / "chatupi.sqlite3")
+    """SQLite path; PAYRAIL_DATABASE > <root>/data/payrail.sqlite3."""
+    return _cfg("DATABASE") or str(root / "data" / "payrail.sqlite3")
 
 
 def base_path() -> str:
-    return (_cfg("BASE_PATH") or "/CHATUPI").rstrip("/")
+    return (_cfg("BASE_PATH") or "/payrail").rstrip("/")
 
 
 def secret_key() -> str:

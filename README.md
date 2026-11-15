@@ -2,68 +2,70 @@
 
 Multi-rail toolkit for extracting local payment links (UPI, iDEAL, Pix, GoPay, MoMo, DANA, ...) from hosted checkout flows, with locale-aware autofill billing identities.
 
-> Fork lineage: [Niceswz/chatgpt-upi-extractor](https://github.com/Niceswz/chatgpt-upi-extractor) (UPI rail). Hardened for public consumption: no tracked databases, no hardcoded personal identities, masked credential output, env-driven config.
+## Credits
 
-## 项目简介
+The UPI extraction method was pioneered by [Niceswz/chatgpt-upi-extractor](https://github.com/Niceswz/chatgpt-upi-extractor) — the India checkout → Vietnam promo handoff design originates from that project. Additional protocol research by the [wutianj/upi-link-extractor](https://github.com/wutianj/upi-link-extractor) and [Lyhh0729/ideal-link-extractor](https://github.com/Lyhh0729/ideal-link-extractor) communities.
 
-**PayRail Hub** 是一个 FastAPI + SQLite 工具集，自动生成 ChatGPT Plus 的本地支付链接（适用于 PhonePe / GPay / Paytm 等支付应用），并附带 locale 感知的账单身份自动填充模块。
+## Overview
 
-## 主要功能
+**PayRail Hub** is a FastAPI + SQLite toolkit that generates local payment links for ChatGPT Plus (works with PhonePe / GPay / Paytm and similar payment apps), with a locale-aware autofill billing identity module.
 
-- 🔐 **密码保护管理后台**（Session Cookie + CSRF 双重验证）— 需在 `.env` 中配置 `CHATUPI_PASSWORD_HASH` 激活；留空仅限本机调试
-- 🗄️ **SQLite 任务队列**（单并发提取，任务记录持久化）
-- 🌏 **双代理策略**：结账/UPI 环节走印度代理，促销环节走越南代理
-- 👤 **自动填充账单身份**（`api_python/identity.py`）：按国家生成本地化姓名/地址/邮编/电话，支持 IN / ID / NL / BR / VN / PH / TH，seed 可复现，env 变量可覆盖任意字段
-- 🔄 **在线 / 维护模式**切换（管理员可动态控制）
-- ⚛️ **React 组件**，可嵌入到更大的门户类前端项目中
+## Features
+
+- 🔐 **Password-protected admin console** (Session Cookie + CSRF) — activate by setting `PAYRAIL_PASSWORD_HASH` in `.env`; leaving it empty is for local debugging only
+- 🗄️ **SQLite job queue** (single-concurrency extraction, persistent job records)
+- 🌏 **Dual-proxy strategy**: India proxy for checkout/UPI steps, Vietnam proxy for the promo step
+- 👤 **Autofill billing identity** (`api_python/identity.py`): generates localized names/addresses/postal codes/phones per country — supports IN / ID / NL / BR / VN / PH / TH, seed-reproducible, any field overridable via env vars
+- 🔄 **Online / maintenance mode** toggle (admin-controlled)
+- ⚛️ **React components** embeddable into larger portal frontends
 
 ## Rails
 
-| Rail | 国家 | 状态 |
+| Rail | Country | Status |
 |---|---|---|
-| UPI | 🇮🇳 IN | ✅ 可用（本仓库核心） |
-| iDEAL / Pix / GoPay / MoMo / DANA | 🇳🇱 🇧🇷 🇮🇩 🇻🇳 🇵🇭 | 🧭 identity 模块已支持这些 locale 的账单身份 |
+| UPI | 🇮🇳 IN | ✅ Working (core of this repo) |
+| iDEAL / Pix / GoPay / MoMo / DANA | 🇳🇱 🇧🇷 🇮🇩 🇻🇳 🇵🇭 | 🧭 Billing identities for these locales supported by the identity module |
 
-## 项目结构（部署示例）
+## Project Layout
 
 ```
 payrail-hub/
-  .env                 # 密钥与代理配置（禁止提交到版本库）
-  .env.example         # 环境变量模板
-  data/                # SQLite 数据库（gitignore）
-  run-output/          # 任务调试产物（gitignore）
-  api_python/          # FastAPI 应用包
+  .env                 # secrets & proxy config (never commit)
+  .env.example         # environment variable template
+  data/                # SQLite database (gitignored)
+  run-output/          # job debug artifacts (gitignored)
+  api_python/          # FastAPI application package
     identity.py        # locale-aware autofill billing identity
     upi_link_service.py  # UPI rail
-  scripts/             # CLI 工具
-  src/components/      # React 嵌入组件
-  deploy/              # systemd + nginx 示例
+  scripts/             # CLI tools
+  src/components/      # React embed components
+  deploy/              # systemd + nginx examples
 ```
 
-服务仅监听 `127.0.0.1:8104`，通过 Nginx 以 `/CHATUPI/` 路径对外暴露。
+The service listens on `127.0.0.1:8104` only, exposed externally via Nginx at the `/payrail/` path (configurable).
 
-## 环境变量配置
+## Environment Variables
 
-将 `.env.example` 复制为 `.env`（生产环境使用 `/opt/chatupi/.env`），并填写以下变量：
+Copy `.env.example` to `.env` (production: `/opt/payrail/.env`) and fill in:
 
-| 变量名 | 说明 |
+| Variable | Description |
 |---|---|
-| `CHATUPI_SECRET_KEY` | Session Cookie 随机密钥（至少 48 字符） |
-| `CHATUPI_PASSWORD_HASH` | PBKDF2 密码哈希（格式：`pbkdf2_sha256$...`）— 留空则管理后台不鉴权 |
-| `CHATUPI_BASE_PATH` | 公开访问路径，例如 `/CHATUPI` |
-| `CHATUPI_DATABASE` | SQLite 数据库文件路径（默认 `data/chatupi.sqlite3`，相对解析） |
-| `CHATUPI_RETENTION_DAYS` | 任务记录保留天数（默认 30 天） |
-| `CHATUPI_HOURLY_LIMIT` | 每用户每小时最大任务数（默认 10） |
-| `CHATUPI_ALLOWED_HOSTS` | 允许访问的主机名（逗号分隔，默认 `localhost,127.0.0.1`） |
-| `VERIFY_APP_ROOT` | 项目根目录（用于清理 run-output；默认仓库根） |
-| `UPI_LINK_PROXY` | 印度出口代理 URL |
-| `UPI_LINK_PROMOTION_PROXY` | 越南促销代理 URL |
+| `PAYRAIL_SECRET_KEY` | Random session cookie key (≥48 chars) |
+| `PAYRAIL_PASSWORD_HASH` | PBKDF2 password hash (`pbkdf2_sha256$...` format) — if empty, the admin console runs without auth |
+| `PAYRAIL_BASE_PATH` | Public base path, e.g. `/payrail` |
+| `PAYRAIL_DATABASE` | SQLite database path (default `data/payrail.sqlite3`, resolved relative to repo root) |
+| `PAYRAIL_RETENTION_DAYS` | Job record retention in days (default 30) |
+| `PAYRAIL_HOURLY_LIMIT` | Max jobs per user per hour (default 10) |
+| `PAYRAIL_ALLOWED_HOSTS` | Allowed hostnames, comma-separated (default `localhost,127.0.0.1`) |
+| `VERIFY_APP_ROOT` | Project root for run-output cleanup (default: repo root) |
+| `UPI_LINK_PROXY` | India exit proxy URL |
+| `UPI_LINK_PROMOTION_PROXY` | Vietnam promo proxy URL |
 
-可选代理专用文件：将 `env_upi_link.txt.example` 复制为 `env_upi_link.txt`。
+Optional proxy-specific file: copy `env_upi_link.txt.example` to `env_upi_link.txt`.
 
-### 账单身份（可选覆盖）
+### Billing Identity (optional override)
 
-UPI rail 默认自动生成印度账单身份（locale-aware，从 `identity.py` 随机生成）。如需固定身份，可覆盖任意字段：
+The UPI rail generates an Indian billing identity automatically (locale-aware, from `identity.py`). To pin specific fields, override any of:
 
 ```
 UPI_BILLING_NAME=...
@@ -73,92 +75,82 @@ UPI_BILLING_STATE=...
 UPI_BILLING_POSTAL=...
 ```
 
-未设置的自动填充字段将从 `identity.py` 按 locale 随机生成。
+Any field left unset is autofilled per locale by `identity.py`.
 
 ### Identity API
 
 ```python
 from api_python.identity import generate_billing_identity, env_billing_identity
 
-# 随机印度身份
+# Random Indian identity
 ident = generate_billing_identity("IN")
 
-# seed 可复现（同一 seed 同一身份）
+# Reproducible via seed (same seed → same identity)
 ident = generate_billing_identity("VN", seed="job-123")
 
-# env 覆盖 + 自动填充兜底
+# Env override with autofill fallback
 ident = env_billing_identity("IN", env_prefix="UPI_BILLING_")
 ```
 
-支持国家：IN, ID, NL, BR, VN, PH, TH（邮编格式与真实国家规则一致）。
+Supported countries: IN, ID, NL, BR, VN, PH, TH (postal formats match each country's real scheme).
 
-### 生成密码哈希
+### Generating the password hash
 
 ```bash
-python -c "from api_python.security import hash_password; print(hash_password('你的密码'))"
+python -c "from api_python.security import hash_password; print(hash_password('your-password'))"
 ```
 
-## 本地运行
+## Running Locally
 
 ```bash
-# 1. 确保安装了 venv 模块（如果没装）
+# 1. Ensure the venv module is available
 sudo apt update
 sudo apt install python3-venv python3-full -y
 
-# 2. 在项目目录下创建虚拟环境（名字叫 venv，可自定义）
+# 2. Create a virtual environment in the project directory
 python3 -m venv venv
 
-# 3. 激活虚拟环境
+# 3. Activate it
 source venv/bin/activate   # Linux / macOS
-# 或 Windows: venv\Scripts\activate
+# Windows: venv\Scripts\activate
 
-# 4. 现在 pip 就是虚拟环境里的了，正常安装
+# 4. Install dependencies and start
 pip install -r requirements.txt
-export CHATUPI_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
-export CHATUPI_PASSWORD_HASH="$(python -c 'from api_python.security import hash_password; print(hash_password("changeme"))')"
-export CHATUPI_ALLOWED_HOSTS="localhost,127.0.0.1"
+export PAYRAIL_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export PAYRAIL_PASSWORD_HASH="$(python -c 'from api_python.security import hash_password; print(hash_password("changeme"))')"
+export PAYRAIL_ALLOWED_HOSTS="localhost,127.0.0.1"
 python -m uvicorn api_python.main:app --host 127.0.0.1 --port 8104
 ```
 
-打开浏览器访问：`http://127.0.0.1:8104/CHATUPI/login`（或你配置的 `CHATUPI_BASE_PATH`）
+Open `http://127.0.0.1:8104/payrail/login` in a browser (or your configured `PAYRAIL_BASE_PATH`).
 
-> ⚠️ **请只使用单个 Uvicorn Worker**：提取队列和实时任务状态存储在进程内存中，多 Worker 会导致状态不一致。
+> ⚠️ **Use a single Uvicorn worker only**: the extraction queue and live job state live in process memory; multiple workers cause inconsistent state.
 
-## 生产部署
+## Production Deployment
 
-`deploy/` 目录中提供了 systemd 服务单元文件和 Nginx 配置示例，根据你的环境修改路径、用户名和主机名即可。**切勿将真实密钥、代理凭证或生产主机名提交到代码仓库。**
+`deploy/` contains example systemd unit files and Nginx configs — adjust paths, usernames, and hostnames for your environment. **Never commit real secrets, proxy credentials, or production hostnames.**
 
-## 安全说明
+## Security Notes
 
-- Session JSON / Access Token 仅在当前任务的内存中使用，不以明文写入 SQLite。
-- 控制台显示的代理 URL 已做脱敏处理（掩码）。
-- 所有错误信息在返回给客户端前均经过脱敏。
-- `.env` 文件、数据库文件、token dump 均已在 `.gitignore` 中排除。
+- Session JSON / access tokens are used in memory for the current job only, never written to SQLite in plaintext.
+- Proxy URLs shown in the console are masked.
+- All error messages are sanitized before being returned to clients.
+- `.env`, database files, and token dumps are all excluded via `.gitignore`.
 
-## 可选模块
+## Optional Modules
 
-- **`chatgpt_rt_oauth`**（可选）：如未安装，审批请求将在没有 OpenAI Sentinel Token 的情况下运行，可能会降低对风控机制的成功率。
-- **`src/components/`**：React 嵌入组件，供宿主门户项目使用。已附带 `src/utils/`、`src/constants/` 及相关 Stub，可独立解析导入。宿主项目仍需自行安装 React 和 `lucide-react`。
+- **`chatgpt_rt_oauth`** (optional): without it, approval requests run without an OpenAI Sentinel Token, which may reduce success rates against risk controls.
+- **`src/components/`**: React embed components for host portal projects. Ships with `src/utils/`, `src/constants/`, and stubs so imports resolve standalone. Host projects must install React and `lucide-react` themselves.
 
-## 前端依赖（仅嵌入组件）
+## Frontend Dependencies (embed components only)
 
 ```text
 react
 lucide-react
 ```
 
-本仓库不包含完整的 SPA 构建；核心产品是 `api_python/templates/` 下的 FastAPI 管理控制台。
+This repo does not include a full SPA build; the primary UI is the FastAPI admin console under `api_python/templates/`.
 
-## 许可证
+## License
 
-MIT — 详见 [LICENSE](LICENSE)。
-
----
-
-## 📢 Telegram
-
-[Free\_to\_AI](https://t.me/Free_to_AI) — AI 平台福利、限免资源情报。
-
-## 友情链接
-
-**[linux.do](https://linux.do)**
+MIT — see [LICENSE](LICENSE).

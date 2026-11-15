@@ -74,4 +74,4 @@ def require_csrf(request: Request) -> None:
 
 
 def configured_password_hash() -> str:
-    return str(os.environ.get("PAYRAIL_PASSWORD_HASH") or os.environ.get("CHATUPI_PASSWORD_HASH") or "").strip()
+    return str(os.environ.get("PAYRAIL_PASSWORD_HASH") or "").strip()
