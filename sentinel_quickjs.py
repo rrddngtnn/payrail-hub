@@ -74,10 +74,10 @@ def _ensure_sdk_file(session: Any, timeout_ms: int) -> Path:
         timeout=max(10, int(timeout_ms / 1000)),
     )
     if getattr(resp, "status_code", 0) != 200:
-        raise RuntimeError(f"下载 sdk.js 失败: HTTP {resp.status_code}")
+        raise RuntimeError(f"Failed to download sdk.js: HTTP {resp.status_code}")
     content = getattr(resp, "content", b"") or (resp.text or "").encode()
     if not content:
-        raise RuntimeError("下载 sdk.js 失败: 响应为空")
+        raise RuntimeError("Failed to download sdk.js: empty response")
     sdk_file.write_bytes(content)
     return sdk_file
 
@@ -148,13 +148,13 @@ def _run_quickjs_action(
         },
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"QuickJS 执行失败: {(proc.stderr or proc.stdout or 'unknown').strip()[:300]}")
+        raise RuntimeError(f"QuickJS execution failed: {(proc.stderr or proc.stdout or 'unknown').strip()[:300]}")
     out = (proc.stdout or "").strip()
     if not out:
-        raise RuntimeError("QuickJS 返回空输出")
+        raise RuntimeError("QuickJS returned empty output")
     data = json.loads(out)
     if not isinstance(data, dict):
-        raise RuntimeError("QuickJS 输出不是 JSON 对象")
+        raise RuntimeError("QuickJS output is not a JSON object")
     return data
 
 
@@ -187,7 +187,7 @@ def _fetch_sentinel_challenge(
         raise RuntimeError(f"/sentinel/req HTTP {resp.status_code}")
     payload = resp.json()
     if not isinstance(payload, dict):
-        raise RuntimeError("Sentinel challenge 响应不是 JSON 对象")
+        raise RuntimeError("Sentinel challenge response is not a JSON object")
     return payload
 
 
@@ -206,7 +206,7 @@ def get_sentinel_token_via_quickjs(
     log = log or (lambda m: logger.info(m))
     quickjs_script = _quickjs_script_path()
     if not quickjs_script.exists():
-        log(f"Sentinel QuickJS 脚本不存在: {quickjs_script}")
+        log(f"Sentinel QuickJS script not found: {quickjs_script}")
         return None
 
     did = str(device_id or uuid.uuid4())
@@ -222,7 +222,7 @@ def get_sentinel_token_via_quickjs(
         )
         request_p = str(requirements.get("request_p") or "").strip()
         if not request_p:
-            log("Sentinel QuickJS 失败: requirements 未返回 request_p")
+            log("Sentinel QuickJS failed: requirements did not return request_p")
             return None
 
         challenge = _fetch_sentinel_challenge(
@@ -230,7 +230,7 @@ def get_sentinel_token_via_quickjs(
         )
         c_value = str(challenge.get("token") or "").strip()
         if not c_value:
-            log("Sentinel QuickJS 失败: challenge token 为空")
+            log("Sentinel QuickJS failed: challenge token is empty")
             return None
 
         solved = _run_quickjs_action(
@@ -246,13 +246,13 @@ def get_sentinel_token_via_quickjs(
         )
         final_p = str(solved.get("final_p") or solved.get("p") or "").strip()
         if not final_p:
-            log("Sentinel QuickJS 失败: solve 未返回 final_p")
+            log("Sentinel QuickJS failed: solve did not return final_p")
             return None
 
         t_raw = solved.get("t")
         t_value = "" if t_raw is None else str(t_raw).strip()
         if not t_value:
-            log("Sentinel QuickJS 失败: solve 未返回有效 t")
+            log("Sentinel QuickJS failed: solve did not return a valid t")
             return None
 
         token = json.dumps(
@@ -260,8 +260,8 @@ def get_sentinel_token_via_quickjs(
             separators=(",", ":"),
             ensure_ascii=False,
         )
-        log(f"Sentinel QuickJS 成功 (p_len={len(final_p)} t_len={len(t_value)} c_len={len(c_value)})")
+        log(f"Sentinel QuickJS success (p_len={len(final_p)} t_len={len(t_value)} c_len={len(c_value)})")
         return token
     except Exception as e:
-        log(f"Sentinel QuickJS 异常: {e}")
+        log(f"Sentinel QuickJS exception: {e}")
         return None
