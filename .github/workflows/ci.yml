@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax check all Python sources
+        run: python -m compileall -q api_python scripts tests
+
+      - name: Run tests
+        run: |
+          python tests/test_identity.py
+          python tests/test_config.py
+          python tests/test_masking.py
+
+      - name: Import smoke (FastAPI app constructs with env set)
+        run: |
+          python - <<'EOF'
+          import os
+          os.environ["PAYRAIL_SECRET_KEY"] = "x" * 50
+          os.environ["PAYRAIL_PASSWORD_HASH"] = "pbkdf2_sha256$citest"
+          import api_python.main  # noqa: F401
+          print("app import OK")
+          EOF
+
+      - name: Secret scan — no credentials in tracked tree
+        run: |
+          # Fail if any obvious credential pattern appears in tracked files
+          ! git grep -nIE '(password|secret|token|key)\s*[=:]\s*["'"'"'][^"'"'"']{12,}' \
+            -- ':!.env.example' ':!*.md' ':!*lock*' \
+          || { echo "Hardcoded credential pattern found"; exit 1; }

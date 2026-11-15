@@ -10,7 +10,10 @@ import uuid
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 from curl_cffi import requests as curl_requests
-from .identity import BillingIdentity, env_billing_identity, generate_billing_identity  # noqa: F401 — re-exported for consumers
+try:  # package import (api_python.upi_link_service)
+    from .identity import BillingIdentity, env_billing_identity, generate_billing_identity  # noqa: F401 — re-exported for consumers
+except ImportError:  # flat import (scripts/ adds api_python/ to sys.path)
+    from identity import BillingIdentity, env_billing_identity, generate_billing_identity  # noqa: F401
 try:
     import fcntl
 except ImportError:

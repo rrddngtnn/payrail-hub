@@ -7,6 +7,12 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(ROOT, 'api_python'))
 from upi_link_service import extract_upi_link, resolve_upi_access_token, resolve_upi_proxy
 
+
+def _mask_proxy_url(proxy: str) -> str:
+    """Mask credentials in a proxy URL. Handles scheme and scheme-less forms."""
+    import re as _re
+    return _re.sub(r'(?i)(^[a-z][a-z0-9+.-]*://)?[^/@:]+:[^/@]+@', lambda m: (m.group(1) or '') + '***@', proxy)
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Local UPI link extract test')
     parser.add_argument('--session-file', required=True, help='Path to session JSON file')
@@ -18,11 +24,7 @@ def main() -> int:
         print('ERROR: no valid accessToken in session file', file=sys.stderr)
         return 1
     proxy = (args.proxy or resolve_upi_proxy()).strip()
-    masked = proxy
-    if '@' in masked:
-        scheme, _, rest = masked.partition('://')
-        creds, _, host = rest.rpartition('@')
-        masked = f'{scheme}://***@{host}' if scheme else f'***@{host}'
+    masked = _mask_proxy_url(proxy)
     print(f'proxy={masked}')
     print('extracting…')
     try:
