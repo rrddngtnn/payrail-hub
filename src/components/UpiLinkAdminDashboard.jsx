@@ -218,7 +218,7 @@ const UpiLinkAdminDashboard = ({
             <p className="font-mono text-slate-800">{row.failStage || '—'}</p>
           </div>
           <div>
-            <p className="font-semibold text-slate-600">Amount (paise)</p>
+            <p className="font-semibold text-slate-600">Amount (minor units)</p>
             <p className="font-mono text-slate-800">{row.amount ?? '—'}</p>
           </div>
         </div>
@@ -265,7 +265,7 @@ const UpiLinkAdminDashboard = ({
       <div className="admin-page-header p-5 md:p-6">
         <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <h2 className="tech-title text-2xl font-semibold text-slate-900">ChatGPT UPI Link Admin</h2>
+            <h2 className="tech-title text-2xl font-semibold text-slate-900">PayRail Hub Admin</h2>
             {!hideTabNav ? (
               <div className="mt-4 flex flex-wrap gap-2">
                 {UPI_ADMIN_TABS.map((tab) => (
@@ -366,7 +366,7 @@ const UpiLinkAdminDashboard = ({
         <div className="rounded-[2rem] surface-panel p-5 md:p-6">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-lg font-black text-slate-900">UPI extraction records</p>
+              <p className="text-lg font-black text-slate-900">Extraction records</p>
               <p className="text-sm text-slate-500">{recordsTotal} total (showing latest 80, including full payment links)</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -427,6 +427,10 @@ const UpiLinkAdminDashboard = ({
                       </div>
                       <div className="flex flex-wrap gap-4">
                         <div>
+                          <dt className="mb-1 text-xs font-medium text-slate-500">Rail</dt>
+                          <dd className="font-mono uppercase text-slate-800">{row.railId || row.rail_id || 'upi'}</dd>
+                        </div>
+                        <div>
                           <dt className="mb-1 text-xs font-medium text-slate-500">Promo eligibility</dt>
                           <dd className="text-slate-800">{promoStateLabel(row.promoState)}</dd>
                         </div>
@@ -436,7 +440,7 @@ const UpiLinkAdminDashboard = ({
                         </div>
                       </div>
                       <div>
-                        <dt className="mb-1 text-xs font-medium text-slate-500">UPI link</dt>
+                        <dt className="mb-1 text-xs font-medium text-slate-500">Payment link</dt>
                         <dd>{renderLinkCell(row)}</dd>
                         {copiedId === row.id ? (
                           <p className="mt-1 text-xs text-emerald-600">Copied</p>
@@ -470,10 +474,11 @@ const UpiLinkAdminDashboard = ({
                   <thead>
                     <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                       <th className="whitespace-nowrap px-3 py-3 font-medium">Time</th>
+                      <th className="whitespace-nowrap px-3 py-3 font-medium">Rail</th>
                       <th className="whitespace-nowrap px-3 py-3 font-medium">User ID</th>
                       <th className="whitespace-nowrap px-3 py-3 font-medium">Email</th>
                       <th className="whitespace-nowrap px-3 py-3 font-medium">Promo</th>
-                      <th className="min-w-[320px] whitespace-nowrap px-3 py-3 font-medium">UPI link</th>
+                      <th className="min-w-[320px] whitespace-nowrap px-3 py-3 font-medium">Payment link</th>
                       <th className="whitespace-nowrap px-3 py-3 font-medium">Status</th>
                       <th className="min-w-[200px] whitespace-nowrap px-3 py-3 font-medium">Notes</th>
                       <th className="whitespace-nowrap px-3 py-3 font-medium">Diagnostics</th>
@@ -485,6 +490,9 @@ const UpiLinkAdminDashboard = ({
                       <tr className="border-b border-slate-100 align-top hover:bg-slate-50/70">
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">
                           {formatDateTime(row.timestamp)}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-3 font-mono text-xs uppercase text-slate-700">
+                          {row.railId || row.rail_id || 'upi'} ({row.currency || 'INR'})
                         </td>
                         <td className="max-w-[220px] px-3 py-3 font-mono text-xs text-slate-600">
                           <span className="block truncate" title={row.userId || ''}>{row.userId || '—'}</span>
@@ -524,7 +532,7 @@ const UpiLinkAdminDashboard = ({
                       </tr>
                       {expandedRowId === row.id ? (
                         <tr key={`${row.id}-debug`} className="border-b border-slate-100 bg-slate-50/80">
-                          <td colSpan={8} className="px-3 py-3">
+                          <td colSpan={9} className="px-3 py-3">
                             {renderDebugPanel(row)}
                           </td>
                         </tr>

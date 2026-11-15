@@ -15,7 +15,7 @@ The UPI extraction method was pioneered by [Niceswz/chatgpt-upi-extractor](https
 
 ## Features
 
-- 🔐 **Password-protected admin console** (Session Cookie + CSRF) — activate by setting `PAYRAIL_PASSWORD_HASH` in `.env`; leaving it empty is for local debugging only
+- 🔐 **Password-protected admin console** (Session Cookie + CSRF) — enforced via `PAYRAIL_PASSWORD_HASH` and `PAYRAIL_SECRET_KEY` at startup
 - 🗄️ **SQLite job queue** (single-concurrency extraction, persistent job records)
 - 🌏 **Dual-proxy strategy**: India proxy for checkout/UPI steps, Vietnam proxy for the promo step
 - 👤 **Autofill billing identity** (`api_python/identity.py`): generates localized names/addresses/postal codes/phones per country — supports IN / ID / NL / BR / VN / PH / TH, seed-reproducible, any field overridable via env vars
@@ -67,7 +67,7 @@ Copy `.env.example` to `.env` (production: `/opt/payrail/.env`) and fill in:
 | Variable | Description |
 |---|---|
 | `PAYRAIL_SECRET_KEY` | Random session cookie key (≥48 chars) |
-| `PAYRAIL_PASSWORD_HASH` | PBKDF2 password hash (`pbkdf2_sha256$...` format) — if empty, the admin console runs without auth |
+| `PAYRAIL_PASSWORD_HASH` | PBKDF2 password hash (`pbkdf2_sha256$...` format, required at startup) |
 | `PAYRAIL_BASE_PATH` | Public base path, e.g. `/payrail` |
 | `PAYRAIL_DATABASE` | SQLite database path (default `data/payrail.sqlite3`, resolved relative to repo root) |
 | `PAYRAIL_RETENTION_DAYS` | Job record retention in days (default 30) |

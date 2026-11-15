@@ -228,6 +228,12 @@ def test_fastapi_multi_rail_endpoints():
             importlib.reload(main_mod)
             db.init_database()
 
+            # Unauthenticated access must be rejected with 401
+            st_unauth, _, _ = _asgi_call(main_mod.app, "GET", "/api/config")
+            assert st_unauth == 401, f"expected 401 unauth, got {st_unauth}"
+            st_unauth_rails, _, _ = _asgi_call(main_mod.app, "GET", "/api/rails")
+            assert st_unauth_rails == 401, f"expected 401 unauth rails, got {st_unauth_rails}"
+
             st, hdrs, data = _asgi_call(main_mod.app, "POST", "/api/auth/login", json_body={"password": "pass123"})
             assert st == 200, f"login failed: {st} {data}"
             csrf = data["csrf_token"]
@@ -237,6 +243,24 @@ def test_fastapi_multi_rail_endpoints():
                     cookies.append(v.decode().split(";", 1)[0])
             cookie_hdr = "; ".join(cookies)
             assert "payrail_session=" in cookie_hdr
+
+            # Missing or bad CSRF token must be rejected with 403
+            st_nocsrf, _, _ = _asgi_call(
+                main_mod.app,
+                "POST",
+                "/api/extract",
+                headers={"Cookie": cookie_hdr},
+                json_body={"access_token": "a.b.c" + "x" * 25, "rail": "ideal"},
+            )
+            assert st_nocsrf == 403, f"expected 403 without CSRF, got {st_nocsrf}"
+            st_badcsrf, _, _ = _asgi_call(
+                main_mod.app,
+                "POST",
+                "/api/extract",
+                headers={"Cookie": cookie_hdr, "X-CSRF-Token": "wrong-token"},
+                json_body={"access_token": "a.b.c" + "x" * 25, "rail": "ideal"},
+            )
+            assert st_badcsrf == 403, f"expected 403 with bad CSRF, got {st_badcsrf}"
 
             st, _, rails_data = _asgi_call(main_mod.app, "GET", "/api/rails", headers={"Cookie": cookie_hdr})
             assert st == 200, rails_data
@@ -302,6 +326,35 @@ def test_sentinel_quickjs_sanitized_env_and_toggle():
             os.environ.pop("PAYRAIL_QUICKJS_SENTINEL", None)
         else:
             os.environ["PAYRAIL_QUICKJS_SENTINEL"] = prev
+
+
+def test_stale_job_does_not_execute_worker():
+    from api_python import db, upi_link_admin_service as admin, upi_link_service as svc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        prev_root = os.environ.get("VERIFY_APP_ROOT")
+        prev_db = os.environ.get("PAYRAIL_DATABASE")
+        os.environ["VERIFY_APP_ROOT"] = tmp
+        os.environ["PAYRAIL_DATABASE"] = os.path.join(tmp, "stale.sqlite3")
+        try:
+            db.init_database()
+            jid = "deadbeef" * 4
+            admin.insert_upi_link_record(job_id=jid, rail_id="ideal", status="failed", fail_stage="stale_timeout", result_message="Job timed out")
+            svc._set_job({"job_id": jid, "rail_id": "ideal", "status": "failed", "error": "Job timed out", "created_at": 1.0, "updated_at": 1.0})
+            # _run_job must exit immediately without touching the already-failed DB record
+            svc._run_job(jid, "invalid-token", "http://unused:1", "owner")
+            rec = admin.list_upi_link_records(rail="ideal")["items"][0]
+            assert rec["status"] == "failed"
+            assert rec["fail_stage"] == "stale_timeout"
+        finally:
+            if prev_root is None:
+                os.environ.pop("VERIFY_APP_ROOT", None)
+            else:
+                os.environ["VERIFY_APP_ROOT"] = prev_root
+            if prev_db is None:
+                os.environ.pop("PAYRAIL_DATABASE", None)
+            else:
+                os.environ["PAYRAIL_DATABASE"] = prev_db
 
 
 if __name__ == "__main__":

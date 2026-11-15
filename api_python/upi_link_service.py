@@ -167,6 +167,10 @@ def _acquire_extract_slot(job_id: str) -> int:
             if not queued:
                 queued = True
                 _persist_job_progress(job_id, steps=[{'name': 'queue wait', 'status': 'queued', 'detail': 'Another extraction is running; queued (1 concurrent account max)'}], status='processing')
+            job = _get_job(job_id)
+            if job and str(job.get('status') or '') != 'processing':
+                os.close(fd)
+                raise RuntimeError(str(job.get('error') or 'Job is no longer active while waiting in queue'))
             if time.time() >= deadline:
                 os.close(fd)
                 raise RuntimeError('extract queue timeout: another extraction is still running; retry later')
@@ -1302,6 +1306,9 @@ def _run_job(job_id: str, access_token: str, proxy: str, user_id: str, *, spec: 
     _queue_register_waiting(job_id)
     try:
         lock_fd = _acquire_extract_slot(job_id)
+        existing = _get_job(job_id)
+        if existing and str(existing.get('status') or '') != 'processing':
+            return
         _queue_set_active(job_id)
         output = extract_upi_link(access_token, proxy=proxy, job_id=job_id, on_step=step_hook, spec=spec)
         steps = output.get('steps') or steps_snapshot
