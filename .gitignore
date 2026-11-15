@@ -139,3 +139,19 @@ cython_debug/
 *.swo
 *~
 .DS_Store
+
+# Local data — SQLite DBs, runtime artifacts, session dumps
+data/
+run-output/
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-wal
+*.db-shm
+chatgpt_token.txt
+*token*.txt
+env_upi_link.txt
+!.env.example
+node_modules/

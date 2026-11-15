@@ -1,5 +1,7 @@
 # CHATUPI — ChatGPT UPI 免费支付链接提取工具
 
+> Fork of [Niceswz/chatgpt-upi-extractor](https://github.com/Niceswz/chatgpt-upi-extractor) with deployment hardening: untracked SQLite, env-driven billing identity, masked proxy output, and hardened `.gitignore`.
+>
 > 📣 **更多 AI 福利羊毛信息，欢迎加入 Telegram 频道：[Free\_to\_AI](https://t.me/Free_to_AI)**
 > 专注分享 AI 平台漏洞、限时优惠、免费额度等第一手羊毛情报！
 

@@ -18,7 +18,12 @@ def main() -> int:
         print('ERROR: no valid accessToken in session file', file=sys.stderr)
         return 1
     proxy = (args.proxy or resolve_upi_proxy()).strip()
-    print(f'proxy={proxy}')
+    masked = proxy
+    if '@' in masked:
+        scheme, _, rest = masked.partition('://')
+        creds, _, host = rest.rpartition('@')
+        masked = f'{scheme}://***@{host}' if scheme else f'***@{host}'
+    print(f'proxy={masked}')
     print('extracting…')
     try:
         result = extract_upi_link(raw, proxy=proxy)
