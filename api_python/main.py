@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import config as app_config
 from .db import cleanup_database, get_primary_db, init_database
 from .portal_tools_service import sanitize_upi_extract_message
 from .security import (
@@ -43,10 +44,10 @@ from .upi_link_service import (
 
 
 ROOT = Path(os.environ.get("VERIFY_APP_ROOT") or Path(__file__).resolve().parents[1])
-BASE_PATH = str(os.environ.get("CHATUPI_BASE_PATH") or "/CHATUPI").rstrip("/")
-RETENTION_DAYS = int(os.environ.get("CHATUPI_RETENTION_DAYS") or 30)
-HOURLY_LIMIT = int(os.environ.get("CHATUPI_HOURLY_LIMIT") or 10)
-SECRET_KEY = str(os.environ.get("CHATUPI_SECRET_KEY") or "")
+BASE_PATH = app_config.base_path()
+RETENTION_DAYS = app_config.retention_days()
+HOURLY_LIMIT = app_config.hourly_limit()
+SECRET_KEY = app_config.secret_key()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
@@ -79,9 +80,9 @@ async def _cleanup_loop() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if len(SECRET_KEY) < 48:
-        raise RuntimeError("CHATUPI_SECRET_KEY is missing or too short")
+        raise RuntimeError("PAYRAIL_SECRET_KEY (or legacy CHATUPI_SECRET_KEY) is missing or too short")
     if not configured_password_hash().startswith("pbkdf2_sha256$"):
-        raise RuntimeError("CHATUPI_PASSWORD_HASH is missing or invalid")
+        raise RuntimeError("PAYRAIL_PASSWORD_HASH (or legacy CHATUPI_PASSWORD_HASH) is missing or invalid")
     init_database()
     recover_stale_upi_records(max_age_sec=360)
     cleanup_database(RETENTION_DAYS)
@@ -108,9 +109,9 @@ app.add_middleware(
     max_age=8 * 3600,
     path=BASE_PATH or "/",
     same_site="strict",
-    https_only=(os.environ.get("CHATUPI_ALLOW_HTTP") != "1"),
+    https_only=(not app_config.allow_http()),
 )
-_raw_hosts = str(os.environ.get("CHATUPI_ALLOWED_HOSTS") or "localhost,127.0.0.1").strip()
+_raw_hosts = app_config.allowed_hosts()
 ALLOWED_HOSTS = [h.strip() for h in _raw_hosts.split(",") if h.strip()] or ["localhost", "127.0.0.1"]
 app.add_middleware(
     TrustedHostMiddleware,

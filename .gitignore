@@ -154,4 +154,4 @@ chatgpt_token.txt
 *token*.txt
 env_upi_link.txt
 !.env.example
-node_modules/
+node_modules/.venv/
