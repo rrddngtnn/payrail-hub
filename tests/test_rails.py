@@ -63,7 +63,7 @@ def test_non_conforming_object_rejected():
 def test_bootstrap_registers_rails_idempotent():
     bootstrap_default_rails()
     bootstrap_default_rails()  # second call must not duplicate
-    assert sorted(RAILS) == ["ideal", "upi"]
+    assert sorted(RAILS) == ["gopay", "ideal", "momo", "pix", "upi"]
     svc = get_rail("upi")
     assert isinstance(svc, RailService)
     assert svc.rail_id == "upi"

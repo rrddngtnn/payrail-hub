@@ -3,7 +3,7 @@
 [![CI](https://github.com/rrddngtnn/payrail-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/rrddngtnn/payrail-hub/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 
-Multi-rail toolkit for extracting local payment links (UPI, iDEAL, Pix, GoPay, MoMo, DANA, ...) from hosted checkout flows, with locale-aware autofill billing identities.
+Multi-rail toolkit for extracting local payment links (UPI, iDEAL, Pix, GoPay, MoMo, ...) from hosted checkout flows, with locale-aware autofill billing identities.
 
 ## Credits
 
@@ -28,7 +28,9 @@ The UPI extraction method was pioneered by [Niceswz/chatgpt-upi-extractor](https
 |---|---|---|
 | UPI | 🇮🇳 IN | ✅ Working (core of this repo) |
 | iDEAL | 🇳🇱 NL | 🧪 Implemented — shares the extraction engine via `RailSpec`; needs NL egress proxy; promo availability is regional |
-| Pix / GoPay / MoMo / DANA | 🇧🇷 🇮🇩 🇻🇳 🇵🇭 | 🧭 Billing identities for these locales supported by the identity module |
+| Pix | 🇧🇷 BR | 🧪 Implemented — `PIX_LINK_PROXY`; full-price extraction |
+| GoPay | 🇮🇩 ID | 🧪 Implemented — `GOPAY_LINK_PROXY`; full-price extraction |
+| MoMo | 🇻🇳 VN | 🧪 Implemented — `MOMO_LINK_PROXY`; full-price extraction |
 
 ## Project Layout
 
@@ -44,6 +46,9 @@ payrail-hub/
     rail_specs.py      # per-rail parameters (country, currency, method type)
     upi_link_service.py  # UPI rail + shared extraction engine
     ideal_link_service.py  # iDEAL rail (NL/EUR)
+    pix_link_service.py    # Pix rail (BR/BRL)
+    gopay_link_service.py  # GoPay rail (ID/IDR)
+    momo_link_service.py   # MoMo rail (VN/VND)
   scripts/             # CLI tools
   src/components/      # React embed components
   deploy/              # systemd + nginx examples

@@ -1,7 +1,7 @@
 """Locale-aware autofill identity for payment checkout forms.
 
 Generates plausible per-country billing profiles (name, address, phone) for
-payment rails that require them (UPI, iDEAL, Pix, GoPay, MoMo, DANA, ...).
+payment rails that require them (UPI, iDEAL, Pix, GoPay, MoMo, ...).
 Profiles are deterministic per (country, seed) so a job can be resumed with
 the same identity, and randomized per job when no seed is given.
 

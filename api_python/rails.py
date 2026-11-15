@@ -76,7 +76,16 @@ def bootstrap_default_rails() -> None:
     """Register the built-in rails once (idempotent)."""
     if "upi" not in RAILS:
         register_rail(upi_service_adapter())
-    if "ideal" not in RAILS:
-        from .ideal_link_service import IdealRail
+    for module_name, class_name in (
+        ("ideal_link_service", "IdealRail"),
+        ("pix_link_service", "PixRail"),
+        ("gopay_link_service", "GoPayRail"),
+        ("momo_link_service", "MomoRail"),
+    ):
+        rail_id = {"ideal_link_service": "ideal", "pix_link_service": "pix",
+                   "gopay_link_service": "gopay", "momo_link_service": "momo"}[module_name]
+        if rail_id not in RAILS:
+            import importlib
 
-        register_rail(IdealRail())
+            module = importlib.import_module(f".{module_name}", __package__)
+            register_rail(getattr(module, class_name)())
