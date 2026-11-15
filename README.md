@@ -1,5 +1,8 @@
 # PayRail Hub — Local Payment Link Extractors
 
+[![CI](https://github.com/rrddngtnn/payrail-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/rrddngtnn/payrail-hub/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
+
 Multi-rail toolkit for extracting local payment links (UPI, iDEAL, Pix, GoPay, MoMo, DANA, ...) from hosted checkout flows, with locale-aware autofill billing identities.
 
 ## Credits
@@ -36,11 +39,16 @@ payrail-hub/
   run-output/          # job debug artifacts (gitignored)
   api_python/          # FastAPI application package
     identity.py        # locale-aware autofill billing identity
+    rails.py           # rail registration & routing contract
     upi_link_service.py  # UPI rail
   scripts/             # CLI tools
   src/components/      # React embed components
   deploy/              # systemd + nginx examples
 ```
+
+### Adding a new rail
+
+Implement the `RailService` protocol (`api_python/rails.py`) — `start_extract`, `get_status`, `recover_stale` — and call `register_rail()` (see `bootstrap_default_rails()` for the wiring pattern). The FastAPI layer routes through the registry, so no app-code changes are needed per rail.
 
 The service listens on `127.0.0.1:8104` only, exposed externally via Nginx at the `/payrail/` path (configurable).
 

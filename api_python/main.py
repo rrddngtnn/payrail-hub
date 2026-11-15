@@ -17,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import config as app_config
 from .db import cleanup_database, get_primary_db, init_database
+from .rails import bootstrap_default_rails
 from .portal_tools_service import sanitize_upi_extract_message
 from .security import (
     clear_login_attempts,
@@ -84,6 +85,7 @@ async def lifespan(_: FastAPI):
     if not configured_password_hash().startswith("pbkdf2_sha256$"):
         raise RuntimeError("PAYRAIL_PASSWORD_HASH is missing or invalid")
     init_database()
+    bootstrap_default_rails()
     recover_stale_upi_records(max_age_sec=360)
     cleanup_database(RETENTION_DAYS)
     task = asyncio.create_task(_cleanup_loop())
