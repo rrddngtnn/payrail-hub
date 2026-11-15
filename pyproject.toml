@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "payrail-hub"
+version = "0.2.0"
+description = "Multi-rail local payment link extractors (UPI / iDEAL / Pix / GoPay / MoMo) with locale-aware autofill billing identities"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.116.1",
+  "uvicorn[standard]==0.35.0",
+  "jinja2==3.1.6",
+  "curl-cffi==0.13.0",
+  "itsdangerous==2.2.0",
+]
+
+[project.scripts]
+payrail-extract = "scripts.run_upi_extract_local:main"
+
+[tool.setuptools.packages.find]
+include = ["api_python*", "scripts*"]

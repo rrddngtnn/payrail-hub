@@ -40,13 +40,17 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 
-SENTINEL_VERSION = "20260219f9f6"
+SENTINEL_VERSION = os.environ.get("PAYRAIL_SENTINEL_VERSION") or "20260219f9f6"
 SENTINEL_SDK_URL = f"https://sentinel.openai.com/sentinel/{SENTINEL_VERSION}/sdk.js"
 SENTINEL_REQ_URL = "https://sentinel.openai.com/backend-api/sentinel/req"
 
 
 def _resolve_node_binary() -> str:
-    return (os.getenv("OPENAI_SENTINEL_NODE_PATH", "") or "").strip() or "node"
+    return (
+        os.getenv("PAYRAIL_NODE_PATH", "").strip()
+        or os.getenv("OPENAI_SENTINEL_NODE_PATH", "").strip()
+        or "node"
+    )
 
 
 def _quickjs_script_path() -> Path:
@@ -65,7 +69,7 @@ def _ensure_sdk_file(session: Any, timeout_ms: int) -> Path:
         SENTINEL_SDK_URL,
         headers={
             "accept": "*/*",
-            "accept-language": "zh-CN,zh;q=0.9",
+            "accept-language": "en-US,en;q=0.9",
             "referer": "https://auth.openai.com/",
             "sec-fetch-dest": "script",
             "sec-fetch-mode": "no-cors",
@@ -124,6 +128,19 @@ process.stdin.on('end', async () => {
 """.strip()
 
 
+def _sanitized_node_env(sdk_file: Path, quickjs_script: Path, timeout_ms: int) -> dict[str, str]:
+    """Minimal environment for the child Node VM — never forward secrets/proxy creds."""
+    env: dict[str, str] = {}
+    for key in ("PATH", "HOME", "TMPDIR", "TEMP", "TMP", "NODE_PATH", "LANG", "LC_ALL"):
+        val = os.environ.get(key)
+        if val:
+            env[key] = val
+    env["OPENAI_SENTINEL_SDK_FILE"] = str(sdk_file)
+    env["OPENAI_SENTINEL_QUICKJS_SCRIPT"] = str(quickjs_script)
+    env["OPENAI_SENTINEL_VM_TIMEOUT_MS"] = str(min(timeout_ms, 30000))
+    return env
+
+
 def _run_quickjs_action(
     *,
     action: str,
@@ -140,12 +157,7 @@ def _run_quickjs_action(
         text=True,
         capture_output=True,
         timeout=max(10, int(timeout_ms / 1000) + 5),
-        env={
-            **os.environ,
-            "OPENAI_SENTINEL_SDK_FILE": str(sdk_file),
-            "OPENAI_SENTINEL_QUICKJS_SCRIPT": str(quickjs_script),
-            "OPENAI_SENTINEL_VM_TIMEOUT_MS": str(min(timeout_ms, 30000)),
-        },
+        env=_sanitized_node_env(sdk_file, quickjs_script, timeout_ms),
     )
     if proc.returncode != 0:
         raise RuntimeError(f"QuickJS execution failed: {(proc.stderr or proc.stdout or 'unknown').strip()[:300]}")
@@ -176,7 +188,7 @@ def _fetch_sentinel_challenge(
             "content-type": "text/plain;charset=UTF-8",
             "accept": "*/*",
             "accept-encoding": "gzip, deflate, br, zstd",
-            "accept-language": "zh-CN,zh;q=0.9",
+            "accept-language": "en-US,en;q=0.9",
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin",

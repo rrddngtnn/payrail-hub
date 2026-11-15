@@ -153,5 +153,7 @@ run-output/
 chatgpt_token.txt
 *token*.txt
 env_upi_link.txt
+env_payrail.txt
 !.env.example
-node_modules/.venv/
+node_modules/
+.venv/

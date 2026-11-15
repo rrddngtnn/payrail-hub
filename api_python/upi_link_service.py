@@ -769,7 +769,7 @@ def _stripe_headers(client: UpiHttpClient) -> dict[str, str]:
     return {'user-agent': client.ua, 'accept-language': client.accept_language, 'origin': 'https://js.stripe.com', 'referer': 'https://js.stripe.com/', 'sec-ch-ua': client.sec_ch_ua, 'sec-ch-ua-mobile': '?0', 'sec-ch-ua-platform': client.sec_ch_ua_platform}
 
 def _import_build_sentinel_token():
-    """Optional OpenAI sentinel helper. Missing module is non-fatal."""
+    """Optional OpenAI sentinel helper. Falls back to bundled QuickJS runner if Node is available."""
     try:
         from .chatgpt_rt_oauth.core.direct_protocol import build_sentinel_token
         return build_sentinel_token
@@ -779,7 +779,22 @@ def _import_build_sentinel_token():
         from chatgpt_rt_oauth.core.direct_protocol import build_sentinel_token
         return build_sentinel_token
     except ImportError:
+        pass
+    if os.environ.get('PAYRAIL_QUICKJS_SENTINEL', '').strip().lower() in ('0', 'false', 'off'):
         return None
+    import shutil
+    try:
+        from sentinel_quickjs import _resolve_node_binary, get_sentinel_token_via_quickjs
+    except ImportError:
+        return None
+    node_bin = _resolve_node_binary()
+    if not (os.path.isfile(node_bin) or shutil.which(node_bin)):
+        return None
+
+    def _quickjs_adapter(session: Any, device_id: str, *, flow: str = 'authorize_continue', **_unused: Any):
+        return get_sentinel_token_via_quickjs(session, device_id, flow=flow)
+
+    return _quickjs_adapter
 
 def _attach_approve_sentinel(client: UpiHttpClient, headers: dict[str, str]) -> dict[str, str]:
     out = dict(headers)

@@ -276,6 +276,34 @@ def test_fastapi_multi_rail_endpoints():
                 os.environ.pop(k, None)
 
 
+def test_sentinel_quickjs_sanitized_env_and_toggle():
+    from pathlib import Path
+    import sentinel_quickjs
+    from api_python.upi_link_service import _import_build_sentinel_token
+
+    os.environ["PAYRAIL_SECRET_KEY"] = "super-secret-value"
+    os.environ["UPI_LINK_PROXY"] = "http://user:pass@proxy:1000"
+    try:
+        env = sentinel_quickjs._sanitized_node_env(Path("/tmp/sdk.js"), Path("/tmp/q.js"), 10000)
+        assert "PAYRAIL_SECRET_KEY" not in env
+        assert "UPI_LINK_PROXY" not in env
+        assert env["OPENAI_SENTINEL_SDK_FILE"] == "/tmp/sdk.js"
+        assert env["OPENAI_SENTINEL_VM_TIMEOUT_MS"] == "10000"
+    finally:
+        os.environ.pop("PAYRAIL_SECRET_KEY", None)
+        os.environ.pop("UPI_LINK_PROXY", None)
+
+    prev = os.environ.get("PAYRAIL_QUICKJS_SENTINEL")
+    os.environ["PAYRAIL_QUICKJS_SENTINEL"] = "0"
+    try:
+        assert _import_build_sentinel_token() is None
+    finally:
+        if prev is None:
+            os.environ.pop("PAYRAIL_QUICKJS_SENTINEL", None)
+        else:
+            os.environ["PAYRAIL_QUICKJS_SENTINEL"] = prev
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

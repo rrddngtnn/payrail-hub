@@ -36,37 +36,59 @@ export default function UpiLinkExtractorTool({
     csrfToken = '',
     ensureCsrfToken,
     onCsrfToken,
+    defaultRail = 'upi',
+    rails = null,
+    endpoints = {},
 }) {
-    const usage = useMemo(() => gptToolUsageBundle('en', 'upiLink'), []);
+    const ep = {
+        mode: endpoints.mode || '/api/settings/upi-link-submit-override',
+        extract: endpoints.extract || '/api/portal/tools/upi-link/extract',
+        status: endpoints.status || '/api/portal/tools/upi-link/status',
+    };
+    const [rail, setRail] = useState(String(defaultRail || 'upi').toLowerCase());
+    const availableRails = useMemo(() => (
+        Array.isArray(rails) && rails.length > 0
+            ? rails
+            : [
+                { rail_id: 'upi', label: 'UPI (India)', currency: 'INR' },
+                { rail_id: 'ideal', label: 'iDEAL (Netherlands)', currency: 'EUR' },
+                { rail_id: 'pix', label: 'Pix (Brazil)', currency: 'BRL' },
+                { rail_id: 'gopay', label: 'GoPay (Indonesia)', currency: 'IDR' },
+                { rail_id: 'momo', label: 'MoMo (Vietnam)', currency: 'VND' },
+            ]
+    ), [rails]);
+    const usage = useMemo(() => gptToolUsageBundle('en', 'upiLink', rail), [rail]);
 
+    const railUpper = rail.toUpperCase();
     const text = {
-        title: 'ChatGPT UPI Free Link',
+        title: `PayRail — ${railUpper} Payment Link`,
+        railLabel: 'Payment Rail',
         tokenLabel: 'Session JSON',
         tokenPlaceholder: 'Paste full session JSON (accessToken + sessionToken)',
-        submit: 'Generate UPI Link',
+        submit: `Generate ${railUpper} Link`,
         submitting: 'Extracting…',
         progress: 'Progress',
-        progressHint: 'Generating UPI link, please wait…',
+        progressHint: `Generating ${railUpper} link, please wait…`,
         queueTitle: 'Queue',
         queueRunning: 'Extracting your account. Please wait…',
         queueWaiting: 'Another extraction is in progress. Waiting in queue…',
         queueWaitingAhead: (n) => `${n} task(s) ahead of you. Please wait…`,
         queueNote: 'Only one account can be extracted at a time.',
-        resultEmpty: 'After success, the UPI payment link will appear here',
-        resultTitle: 'UPI Payment Link',
+        resultEmpty: `After success, the ${railUpper} payment link will appear here`,
+        resultTitle: `${railUpper} Payment Link`,
         link: 'Payment link',
         open: 'Open link',
         copy: 'Copy',
         copied: 'Copied',
-        hint: 'Share with Indian users — PhonePe / GPay / Paytm.',
+        hint: `Payment link extracted for the ${railUpper} rail.`,
         history: 'My extraction records',
         historyEmpty: 'No records yet',
-        historyHint: 'Free for logged-in users; recent links saved on this device',
+        historyHint: 'Recent links saved on this device',
         emptyToken: 'Please paste session JSON first',
         failGeneric: 'Extraction failed. Please try again.',
         failTimeout: 'Timed out. Please try again.',
         needLogin: 'Please sign in first.',
-        offline: 'UPI link extraction is under maintenance. Please try again later.',
+        offline: 'Link extraction is under maintenance. Please try again later.',
         copyFail: 'Copy failed',
         clear: 'Clear input',
         viewLink: 'View link',
@@ -130,11 +152,11 @@ export default function UpiLinkExtractorTool({
 
     useEffect(() => {
         if (!apiBase) return;
-        fetch(`${apiBase}/api/settings/upi-link-submit-override?t=${Date.now()}`, buildGetOpts())
+        fetch(`${apiBase}${ep.mode}?t=${Date.now()}`, buildGetOpts())
             .then((r) => (r.ok ? r.json() : {}))
             .then((data) => setSubmitMode(data?.mode === 'offline' ? 'offline' : 'online'))
             .catch(() => {});
-    }, [apiBase, buildGetOpts]);
+    }, [apiBase, buildGetOpts, ep.mode]);
 
     const POLL_MAX = 180;
     const POLL_INTERVAL_MS = 2000;
@@ -148,7 +170,7 @@ export default function UpiLinkExtractorTool({
                     ? fetchOpts('GET', null, true)
                     : { method: 'GET', credentials: 'include', cache: 'no-store' };
                 const res = await fetch(
-                    `${apiBase}/api/portal/tools/upi-link/status?job_id=${encodeURIComponent(jobId)}&t=${Date.now()}`,
+                    `${apiBase}${ep.status}?job_id=${encodeURIComponent(jobId)}&t=${Date.now()}`,
                     opts,
                 );
                 const data = await res.json().catch(() => ({}));
@@ -192,8 +214,8 @@ export default function UpiLinkExtractorTool({
         try {
             const { res, data } = await portalCsrfPost({
                 apiBase,
-                path: '/api/portal/tools/upi-link/extract',
-                body: { access_token: raw },
+                path: ep.extract,
+                body: { access_token: raw, rail },
                 fetchOpts,
                 ensureCsrfToken,
                 onCsrfToken,
@@ -214,7 +236,8 @@ export default function UpiLinkExtractorTool({
                 return;
             }
             const entry = {
-                id: `upi-${Date.now()}`,
+                id: `${rail}-${Date.now()}`,
+                rail_id: rail,
                 status: 'completed',
                 long_url: polled.long_url,
                 createdAt: Date.now(),
@@ -287,6 +310,19 @@ export default function UpiLinkExtractorTool({
                 <form onSubmit={onSubmit} className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
                     <div className="flex flex-col gap-4 h-full min-h-[280px]">
                         <div className="flex flex-col flex-1 min-h-0">
+                            <label className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider">{text.railLabel}</label>
+                            <select
+                                value={rail}
+                                onChange={(e) => setRail(e.target.value)}
+                                disabled={loading || submitMode === 'offline'}
+                                className="mt-2 mb-3 w-full px-3 py-2.5 bg-white border border-neutral-200 rounded-xl text-xs font-medium outline-none focus:border-neutral-400 disabled:bg-neutral-100"
+                            >
+                                {availableRails.map((r) => (
+                                    <option key={r.rail_id} value={r.rail_id}>
+                                        {`${r.label || r.rail_id.toUpperCase()} — ${r.currency || ''}`}
+                                    </option>
+                                ))}
+                            </select>
                             <label className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider">{text.tokenLabel}</label>
                             <textarea
                                 value={token}

@@ -149,17 +149,25 @@ Open `http://127.0.0.1:8104/payrail/login` in a browser (or your configured `PAY
 
 `deploy/` contains example systemd unit files and Nginx configs — adjust paths, usernames, and hostnames for your environment. **Never commit real secrets, proxy credentials, or production hostnames.**
 
+### Docker
+
+```bash
+docker build -t payrail-hub .
+docker run --rm -p 127.0.0.1:8104:8104 --env-file .env -v $(pwd)/data:/app/data payrail-hub
+```
+
 ## Security Notes
 
 - Session JSON / access tokens are used in memory for the current job only, never written to SQLite in plaintext.
 - Proxy URLs shown in the console are masked.
 - All error messages are sanitized before being returned to clients.
+- The QuickJS Sentinel helper passes a sanitized minimal environment to Node.js (secrets and proxy credentials are never forwarded).
 - `.env`, database files, and token dumps are all excluded via `.gitignore`.
 
 ## Optional Modules
 
-- **`chatgpt_rt_oauth`** (optional): without it, approval requests run without an OpenAI Sentinel Token, which may reduce success rates against risk controls.
-- **`src/components/`**: React embed components for host portal projects. Ships with `src/utils/`, `src/constants/`, and stubs so imports resolve standalone. Host projects must install React and `lucide-react` themselves.
+- **`chatgpt_rt_oauth`** / **bundled QuickJS Sentinel (`sentinel_quickjs.py`)**: approval requests look for `chatgpt_rt_oauth` first, then automatically fall back to `sentinel_quickjs.py` when Node.js is installed (disable with `PAYRAIL_QUICKJS_SENTINEL=0`).
+- **`src/components/`**: React embed components for host portal projects (accept `defaultRail`, `rails`, and `endpoints` props). Ships with `src/utils/`, `src/constants/`, and stubs so imports resolve standalone. Host projects must install React and `lucide-react` themselves.
 
 ## Frontend Dependencies (embed components only)
 
