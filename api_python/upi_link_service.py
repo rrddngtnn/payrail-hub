@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 from curl_cffi import requests as curl_requests
+from .identity import BillingIdentity, env_billing_identity, generate_billing_identity  # noqa: F401 — re-exported for consumers
 try:
     import fcntl
 except ImportError:
@@ -34,11 +35,6 @@ CHATGPT_CLIENT_VERSION = 'prod-db390ebea64862bf1899c420a4c736e0cf639747'
 CHATGPT_CLIENT_BUILD = '7904904'
 STRIPE_VERSION = '2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1'
 STRIPE_RUNTIME_VERSION = '6f8494a281'
-UPI_BILLING_NAME = os.environ.get('UPI_BILLING_NAME') or 'Raj Kumar'
-UPI_BILLING_LINE1 = os.environ.get('UPI_BILLING_LINE1') or '123 MG Road'
-UPI_BILLING_CITY = os.environ.get('UPI_BILLING_CITY') or 'Mumbai'
-UPI_BILLING_STATE = os.environ.get('UPI_BILLING_STATE') or 'MH'
-UPI_BILLING_POSTAL = os.environ.get('UPI_BILLING_POSTAL') or '400001'
 UPI_PROMO_COUPON = 'plus-1-month-free'
 DEFAULT_LOCAL_PROXY = ""
 UPI_SCHEME_RE = re.compile('upi://pay[^\\s\\"\'<>]*', re.I)
@@ -1072,11 +1068,12 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
     step('IN reentry Stripe init', 'ok', f'amount={amount}')
     _human_pause('med')
     email = _jwt_email(token)
-    taxes_body = {'checkout_session_id': cs_id, 'checkout_email': email, 'billing_country': 'IN', 'billing_name': UPI_BILLING_NAME, 'currency': 'INR', 'tax_id': None, 'processor_entity': processor_entity, 'billing_address': {'line1': UPI_BILLING_LINE1, 'city': UPI_BILLING_CITY, 'state': UPI_BILLING_STATE, 'country': 'IN', 'postal_code': UPI_BILLING_POSTAL}}
+    billing = env_billing_identity('IN', env_prefix='UPI_BILLING_')
+    taxes_body = {'checkout_session_id': cs_id, 'checkout_email': email, 'billing_country': 'IN', 'billing_name': billing.name, 'currency': 'INR', 'tax_id': None, 'processor_entity': processor_entity, 'billing_address': {'line1': billing.line1, 'city': billing.city, 'state': billing.state, 'country': 'IN', 'postal_code': billing.postal}}
     client.request('POST', 'https://chatgpt.com/backend-api/payments/checkout/taxes', headers=_target_headers(headers, '/backend-api/payments/checkout/taxes', referer), json_body=taxes_body, proxy=provider_proxy)
     step('UPI ChatGPT taxes', 'ok', 'country=IN')
     _human_pause('short')
-    tax_form = {'eid': 'NA', 'tax_region[country]': 'IN', 'tax_region[postal_code]': UPI_BILLING_POSTAL, 'tax_region[line1]': UPI_BILLING_LINE1, 'tax_region[city]': UPI_BILLING_CITY, 'tax_region[state]': UPI_BILLING_STATE, 'key': stripe_pk}
+    tax_form = {'eid': 'NA', 'tax_region[country]': 'IN', 'tax_region[postal_code]': billing.postal, 'tax_region[line1]': billing.line1, 'tax_region[city]': billing.city, 'tax_region[state]': billing.state, 'key': stripe_pk}
     client.request('POST', f'https://api.stripe.com/v1/payment_pages/{cs_id}', headers=_stripe_headers(client), form=tax_form, proxy=provider_proxy)
     step('UPI Stripe tax region', 'ok', 'country=IN')
     _human_pause('short')
@@ -1087,7 +1084,7 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
         raise RuntimeError(f'upi promo not eligible: amount policy failed after tax sync: amount={amount}')
     step('UPI tax Stripe init', 'ok', f'amount={amount}')
     _human_pause('med')
-    pm_form = {'billing_details[name]': UPI_BILLING_NAME, 'billing_details[email]': email, 'billing_details[address][country]': 'IN', 'billing_details[address][line1]': UPI_BILLING_LINE1, 'billing_details[address][city]': UPI_BILLING_CITY, 'billing_details[address][state]': UPI_BILLING_STATE, 'billing_details[address][postal_code]': UPI_BILLING_POSTAL, 'type': 'upi', 'client_attribution_metadata[checkout_session_id]': cs_id, 'key': stripe_pk}
+    pm_form = {'billing_details[name]': billing.name, 'billing_details[email]': email, 'billing_details[address][country]': 'IN', 'billing_details[address][line1]': billing.line1, 'billing_details[address][city]': billing.city, 'billing_details[address][state]': billing.state, 'billing_details[address][postal_code]': billing.postal, 'type': 'upi', 'client_attribution_metadata[checkout_session_id]': cs_id, 'key': stripe_pk}
     st, text, _ = client.request('POST', 'https://api.stripe.com/v1/payment_methods', headers=_stripe_headers(client), form=pm_form, proxy=provider_proxy)
     pm = _json_or_error(st, text, 'stripe payment_methods')
     pm_id = _first_string(pm, ['id'])

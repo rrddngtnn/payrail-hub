@@ -1,32 +1,43 @@
-# CHATUPI — ChatGPT UPI 免费支付链接提取工具
+# PayRail Hub — Local Payment Link Extractors
 
-> Fork of [Niceswz/chatgpt-upi-extractor](https://github.com/Niceswz/chatgpt-upi-extractor) with deployment hardening: untracked SQLite, env-driven billing identity, masked proxy output, and hardened `.gitignore`.
->
-> 📣 **更多 AI 福利羊毛信息，欢迎加入 Telegram 频道：[Free\_to\_AI](https://t.me/Free_to_AI)**
-> 专注分享 AI 平台漏洞、限时优惠、免费额度等第一手羊毛情报！
+Multi-rail toolkit for extracting local payment links (UPI, iDEAL, Pix, GoPay, MoMo, DANA, ...) from hosted checkout flows, with locale-aware autofill billing identities.
+
+> Fork lineage: [Niceswz/chatgpt-upi-extractor](https://github.com/Niceswz/chatgpt-upi-extractor) (UPI rail). Hardened for public consumption: no tracked databases, no hardcoded personal identities, masked credential output, env-driven config.
 
 ## 项目简介
 
-**CHATUPI** 是一个独立的 FastAPI + SQLite 服务，用于自动提取 ChatGPT 的 UPI 支付链接。
-
-通过该工具，你可以利用 ChatGPT Free 账号的印度首月免费促销活动，自动生成 UPI 支付链接（适用于 PhonePe / GPay / Paytm 等印度支付应用）。
+**PayRail Hub** 是一个 FastAPI + SQLite 工具集，自动生成 ChatGPT Plus 的本地支付链接（适用于 PhonePe / GPay / Paytm 等支付应用），并附带 locale 感知的账单身份自动填充模块。
 
 ## 主要功能
 
-- 🔐 **密码保护管理后台**（Session Cookie + CSRF 双重验证）
-- 🗄️ **SQLite 任务队列**（单并发提取，带任务记录持久化）
+- 🔐 **密码保护管理后台**（Session Cookie + CSRF 双重验证）— 需在 `.env` 中配置 `CHATUPI_PASSWORD_HASH` 激活；留空仅限本机调试
+- 🗄️ **SQLite 任务队列**（单并发提取，任务记录持久化）
 - 🌏 **双代理策略**：结账/UPI 环节走印度代理，促销环节走越南代理
+- 👤 **自动填充账单身份**（`api_python/identity.py`）：按国家生成本地化姓名/地址/邮编/电话，支持 IN / ID / NL / BR / VN / PH / TH，seed 可复现，env 变量可覆盖任意字段
 - 🔄 **在线 / 维护模式**切换（管理员可动态控制）
 - ⚛️ **React 组件**，可嵌入到更大的门户类前端项目中
+
+## Rails
+
+| Rail | 国家 | 状态 |
+|---|---|---|
+| UPI | 🇮🇳 IN | ✅ 可用（本仓库核心） |
+| iDEAL / Pix / GoPay / MoMo / DANA | 🇳🇱 🇧🇷 🇮🇩 🇻🇳 🇵🇭 | 🧭 identity 模块已支持这些 locale 的账单身份 |
 
 ## 项目结构（部署示例）
 
 ```
-/opt/chatupi/
+payrail-hub/
   .env                 # 密钥与代理配置（禁止提交到版本库）
-  data/                # SQLite 数据库
-  run-output/          # 任务调试产物
+  .env.example         # 环境变量模板
+  data/                # SQLite 数据库（gitignore）
+  run-output/          # 任务调试产物（gitignore）
   api_python/          # FastAPI 应用包
+    identity.py        # locale-aware autofill billing identity
+    upi_link_service.py  # UPI rail
+  scripts/             # CLI 工具
+  src/components/      # React 嵌入组件
+  deploy/              # systemd + nginx 示例
 ```
 
 服务仅监听 `127.0.0.1:8104`，通过 Nginx 以 `/CHATUPI/` 路径对外暴露。
@@ -38,17 +49,48 @@
 | 变量名 | 说明 |
 |---|---|
 | `CHATUPI_SECRET_KEY` | Session Cookie 随机密钥（至少 48 字符） |
-| `CHATUPI_PASSWORD_HASH` | PBKDF2 密码哈希（格式：`pbkdf2_sha256$...`） |
+| `CHATUPI_PASSWORD_HASH` | PBKDF2 密码哈希（格式：`pbkdf2_sha256$...`）— 留空则管理后台不鉴权 |
 | `CHATUPI_BASE_PATH` | 公开访问路径，例如 `/CHATUPI` |
-| `CHATUPI_DATABASE` | SQLite 数据库文件路径 |
+| `CHATUPI_DATABASE` | SQLite 数据库文件路径（默认 `data/chatupi.sqlite3`，相对解析） |
 | `CHATUPI_RETENTION_DAYS` | 任务记录保留天数（默认 30 天） |
 | `CHATUPI_HOURLY_LIMIT` | 每用户每小时最大任务数（默认 10） |
 | `CHATUPI_ALLOWED_HOSTS` | 允许访问的主机名（逗号分隔，默认 `localhost,127.0.0.1`） |
-| `VERIFY_APP_ROOT` | 项目根目录（用于清理 run-output） |
+| `VERIFY_APP_ROOT` | 项目根目录（用于清理 run-output；默认仓库根） |
 | `UPI_LINK_PROXY` | 印度出口代理 URL |
 | `UPI_LINK_PROMOTION_PROXY` | 越南促销代理 URL |
 
 可选代理专用文件：将 `env_upi_link.txt.example` 复制为 `env_upi_link.txt`。
+
+### 账单身份（可选覆盖）
+
+UPI rail 默认自动生成印度账单身份（locale-aware，从 `identity.py` 随机生成）。如需固定身份，可覆盖任意字段：
+
+```
+UPI_BILLING_NAME=...
+UPI_BILLING_LINE1=...
+UPI_BILLING_CITY=...
+UPI_BILLING_STATE=...
+UPI_BILLING_POSTAL=...
+```
+
+未设置的自动填充字段将从 `identity.py` 按 locale 随机生成。
+
+### Identity API
+
+```python
+from api_python.identity import generate_billing_identity, env_billing_identity
+
+# 随机印度身份
+ident = generate_billing_identity("IN")
+
+# seed 可复现（同一 seed 同一身份）
+ident = generate_billing_identity("VN", seed="job-123")
+
+# env 覆盖 + 自动填充兜底
+ident = env_billing_identity("IN", env_prefix="UPI_BILLING_")
+```
+
+支持国家：IN, ID, NL, BR, VN, PH, TH（邮编格式与真实国家规则一致）。
 
 ### 生成密码哈希
 
@@ -70,9 +112,6 @@ python3 -m venv venv
 source venv/bin/activate   # Linux / macOS
 # 或 Windows: venv\Scripts\activate
 
-
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
 # 4. 现在 pip 就是虚拟环境里的了，正常安装
 pip install -r requirements.txt
 export CHATUPI_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
@@ -94,7 +133,7 @@ python -m uvicorn api_python.main:app --host 127.0.0.1 --port 8104
 - Session JSON / Access Token 仅在当前任务的内存中使用，不以明文写入 SQLite。
 - 控制台显示的代理 URL 已做脱敏处理（掩码）。
 - 所有错误信息在返回给客户端前均经过脱敏。
-- `.env` 文件、代理凭证及任何真实 Session 数据请务必加入 `.gitignore`，不要提交到版本库。
+- `.env` 文件、数据库文件、token dump 均已在 `.gitignore` 中排除。
 
 ## 可选模块
 
@@ -116,20 +155,10 @@ MIT — 详见 [LICENSE](LICENSE)。
 
 ---
 
-## 📢 欢迎关注 Telegram 频道
+## 📢 Telegram
 
-如果你对 **AI 平台漏洞福利、限免资源、羊毛情报** 感兴趣，欢迎加入：
-
-**👉 [https://t.me/Free\_to\_AI](https://t.me/Free_to_AI)**
-
-频道内容包括：
-- 🐑 各大 AI 平台（ChatGPT、Claude、Gemini 等）免费额度薅羊毛攻略
-- 🔓 AI 账号注册与使用技巧
-- 💰 限时优惠、促销活动第一时间推送
-- 🛠️ 开源工具与实用脚本分享
+[Free\_to\_AI](https://t.me/Free_to_AI) — AI 平台福利、限免资源情报。
 
 ## 友情链接
 
 **[linux.do](https://linux.do)**
-
-**欢迎转发、Star 本项目，让更多人受益！** 🌟
