@@ -76,3 +76,7 @@ def bootstrap_default_rails() -> None:
     """Register the built-in rails once (idempotent)."""
     if "upi" not in RAILS:
         register_rail(upi_service_adapter())
+    if "ideal" not in RAILS:
+        from .ideal_link_service import IdealRail
+
+        register_rail(IdealRail())

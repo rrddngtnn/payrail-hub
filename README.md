@@ -27,7 +27,8 @@ The UPI extraction method was pioneered by [Niceswz/chatgpt-upi-extractor](https
 | Rail | Country | Status |
 |---|---|---|
 | UPI | 🇮🇳 IN | ✅ Working (core of this repo) |
-| iDEAL / Pix / GoPay / MoMo / DANA | 🇳🇱 🇧🇷 🇮🇩 🇻🇳 🇵🇭 | 🧭 Billing identities for these locales supported by the identity module |
+| iDEAL | 🇳🇱 NL | 🧪 Implemented — shares the extraction engine via `RailSpec`; needs NL egress proxy; promo availability is regional |
+| Pix / GoPay / MoMo / DANA | 🇧🇷 🇮🇩 🇻🇳 🇵🇭 | 🧭 Billing identities for these locales supported by the identity module |
 
 ## Project Layout
 
@@ -40,7 +41,9 @@ payrail-hub/
   api_python/          # FastAPI application package
     identity.py        # locale-aware autofill billing identity
     rails.py           # rail registration & routing contract
-    upi_link_service.py  # UPI rail
+    rail_specs.py      # per-rail parameters (country, currency, method type)
+    upi_link_service.py  # UPI rail + shared extraction engine
+    ideal_link_service.py  # iDEAL rail (NL/EUR)
   scripts/             # CLI tools
   src/components/      # React embed components
   deploy/              # systemd + nginx examples

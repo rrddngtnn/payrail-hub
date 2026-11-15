@@ -60,14 +60,14 @@ def test_non_conforming_object_rejected():
         raise AssertionError("expected TypeError")
 
 
-def test_bootstrap_registers_upi_idempotent():
+def test_bootstrap_registers_rails_idempotent():
     bootstrap_default_rails()
     bootstrap_default_rails()  # second call must not duplicate
-    assert list(RAILS) == ["upi"]
+    assert sorted(RAILS) == ["ideal", "upi"]
     svc = get_rail("upi")
     assert isinstance(svc, RailService)
     assert svc.rail_id == "upi"
-    del RAILS["upi"]
+    RAILS.clear()
 
 
 def test_upi_adapter_routes_to_real_service():
@@ -76,7 +76,7 @@ def test_upi_adapter_routes_to_real_service():
     assert hasattr(svc, "start_extract")
     assert hasattr(svc, "get_status")
     assert hasattr(svc, "recover_stale")
-    del RAILS["upi"]
+    RAILS.clear()
 
 
 if __name__ == "__main__":

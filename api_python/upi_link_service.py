@@ -831,28 +831,33 @@ def _json_or_error(status: int, text: str, label: str) -> dict:
         raise RuntimeError(f'{label} unexpected response')
     return data
 
-def _is_upi_url(url: str) -> bool:
+def _spec_regexes(spec: Any) -> tuple:
+    if spec is None:
+        return (UPI_SCHEME_RE, STRIPE_UPI_INSTRUCTIONS_RE, STRIPE_HOSTED_RE)
+    import re as _re
+    return tuple(_re.compile(pat, _re.I) for pat in spec.url_patterns)
+
+def _is_rail_url(url: str, spec: Any=None) -> bool:
     u = str(url or '').strip()
-    if u.lower().startswith('upi://'):
-        return True
-    try:
-        parsed = urlparse(u)
-        host = (parsed.hostname or '').lower()
-        path = parsed.path or ''
-        if host == 'hooks.stripe.com' and path.startswith('/redirect/'):
-            return True
-        if 'stripe.com' in host and ('upi' in path or path.startswith('/redirect/')):
-            return True
-    except Exception:
+    if not u:
         return False
+    for regex in _spec_regexes(spec):
+        if regex.search(u):
+            return True
     return False
 
-def _extract_upi_from_text(text: str) -> str:
-    for regex in (UPI_SCHEME_RE, STRIPE_UPI_INSTRUCTIONS_RE, STRIPE_HOSTED_RE):
+def _is_upi_url(url: str) -> bool:
+    return _is_rail_url(url, None)
+
+def _extract_rail_from_text(text: str, spec: Any=None) -> str:
+    for regex in _spec_regexes(spec):
         m = regex.search(text or '')
-        if m and _is_upi_url(m.group(0)):
+        if m:
             return m.group(0)
     return ''
+
+def _extract_upi_from_text(text: str) -> str:
+    return _extract_rail_from_text(text, None)
 
 def _payment_page_poll_summary(payload: Any) -> str:
     if not isinstance(payload, dict):
@@ -868,7 +873,7 @@ def _payment_page_poll_summary(payload: Any) -> str:
         status = setup_intent.get('status')
     return f"keys=[{keys}]; state={state or '-'}; status={status or '-'}"
 
-def _find_upi_action_url(value: Any) -> str:
+def _find_upi_action_url(value: Any, spec: Any=None) -> str:
     if isinstance(value, dict):
         na = value.get('next_action') or {}
         if isinstance(na, dict):
@@ -890,21 +895,21 @@ def _find_upi_action_url(value: Any) -> str:
             if _is_upi_url(url):
                 return url
         for item in value.values():
-            found = _find_upi_action_url(item)
+            found = _find_upi_action_url(item, spec)
             if found:
                 return found
     elif isinstance(value, list):
         for item in value:
-            found = _find_upi_action_url(item)
+            found = _find_upi_action_url(item, spec)
             if found:
                 return found
     elif isinstance(value, str):
-        return _extract_upi_from_text(value)
+        return _extract_rail_from_text(value, spec)
     return ''
 
-def _extract_redirect_url(payload: Any) -> str:
+def _extract_redirect_url(payload: Any, spec: Any=None) -> str:
     if isinstance(payload, dict):
-        found = _find_upi_action_url(payload)
+        found = _find_upi_action_url(payload, spec)
         if found:
             return found
         na = payload.get('next_action') or {}
@@ -915,7 +920,7 @@ def _extract_redirect_url(payload: Any) -> str:
                 if url:
                     return url
         for item in payload.values():
-            found = _extract_redirect_url(item)
+            found = _extract_redirect_url(item, spec)
             if found:
                 return found
     elif isinstance(payload, list):
@@ -953,10 +958,12 @@ def _stripe_init_form(stripe_pk: str) -> dict[str, str]:
     form['browser_timezone'] = 'Asia/Kolkata'
     return form
 
-def extract_upi_link(access_token: str, proxy: str | None=None, *, job_id: str='', on_step: Any=None) -> dict[str, Any]:
+def extract_upi_link(access_token: str, proxy: str | None=None, *, job_id: str='', on_step: Any=None, spec: Any=None) -> dict[str, Any]:
+    from .rail_specs import UPI_SPEC
+    spec = spec or UPI_SPEC
     proxy_url = str(proxy or resolve_upi_proxy() or '').strip()
     if not proxy_url:
-        raise RuntimeError('proxy is required for UPI extraction')
+        raise RuntimeError(f'proxy is required for {spec.rail_id} extraction')
     raw_session = str(access_token or '').strip()
     orig_token = normalize_access_token(raw_session)
     token = resolve_upi_access_token(raw_session, proxy_url)
@@ -977,9 +984,9 @@ def extract_upi_link(access_token: str, proxy: str | None=None, *, job_id: str='
     for attempt in range(1, MAX_REBUILD_ATTEMPTS + 1):
         if attempt > 1:
             step('rebuild checkout', 'info', f'attempt {attempt}/{MAX_REBUILD_ATTEMPTS}')
-        client = UpiHttpClient(proxy_url, region='IN')
+        client = UpiHttpClient(proxy_url, region=spec.country)
         try:
-            result = _run_upi_attempt(client, token, step, steps)
+            result = _run_upi_attempt(client, token, step, steps, spec=spec)
             result['steps'] = steps
             return result
         except Exception as exc:
@@ -998,13 +1005,13 @@ def extract_upi_link(access_token: str, proxy: str | None=None, *, job_id: str='
                 pass
     raise last_error or RuntimeError('extract failed after rebuild retries')
 
-def _run_upi_attempt(client: UpiHttpClient, token: str, step: Any, steps: list[dict[str, str]]) -> dict[str, Any]:
+def _run_upi_attempt(client: UpiHttpClient, token: str, step: Any, steps: list[dict[str, str]], *, spec: Any) -> dict[str, Any]:
     india_base = client.base_proxy
-    checkout_proxy = proxy_for_region(india_base, CHECKOUT_REGION) or india_base
+    checkout_proxy = proxy_for_region(india_base, spec.country) or india_base
     headers = _chatgpt_headers(client, token)
-    step('browser fingerprint', 'ok', f'IN chrome TLS={client.impersonate}; ua=Chrome/{client.chrome_full}; locale={client.locale}; did={client.device_id[:8]}')
+    step('browser fingerprint', 'ok', f'{spec.country} chrome TLS={client.impersonate}; ua=Chrome/{client.chrome_full}; locale={client.locale}; did={client.device_id[:8]}')
     _human_pause('short')
-    checkout_body = {'entry_point': 'all_plans_pricing_modal', 'plan_name': 'chatgptplusplan', 'billing_details': {'country': 'IN', 'currency': 'INR'}, 'promo_campaign': {'promo_campaign_id': 'plus-1-month-free', 'is_coupon_from_query_param': False}, 'checkout_ui_mode': 'custom'}
+    checkout_body = spec.checkout_body()
     ch = dict(headers)
     ch['x-openai-target-path'] = '/backend-api/payments/checkout'
     ch['x-openai-target-route'] = '/backend-api/payments/checkout'
@@ -1015,11 +1022,11 @@ def _run_upi_attempt(client: UpiHttpClient, token: str, step: Any, steps: list[d
         raise RuntimeError(f'checkout missing cs_id: {text[:200]}')
     processor_entity = _first_string(checkout, ['processor_entity', 'processorEntity']) or 'openai_ie'
     stripe_pk = _first_string(checkout, ['publishable_key']) or ''
-    step('checkout', 'ok', f'IN bootstrap cs={cs_id}')
+    step('checkout', 'ok', f'{spec.country} bootstrap cs={cs_id}')
     _human_pause('med')
 
     def stripe_init(active: UpiHttpClient, proxy: str) -> dict:
-        form = _stripe_init_form(stripe_pk)
+        form = _stripe_init_form(stripe_pk, spec)
         st, body, _ = active.request('POST', f'https://api.stripe.com/v1/payment_pages/{cs_id}/init', headers=_stripe_headers(active), form=form, proxy=proxy)
         data = _json_or_error(st, body, 'stripe init')
         hosted = _first_string(data, ['stripe_hosted_url'])
@@ -1028,66 +1035,69 @@ def _run_upi_attempt(client: UpiHttpClient, token: str, step: Any, steps: list[d
         data['_stripe_hosted_url'] = hosted
         return data
     init = stripe_init(client, checkout_proxy)
-    _ensure_upi_offered(init, 'IN bootstrap')
+    _ensure_payment_method_offered(init, spec, f'{spec.country} bootstrap')
     step('stripe init', 'ok', f"amount={_expected_amount(init)}; methods={','.join(_payment_method_types(init))}")
     _human_pause('med')
-    vn_client = _spawn_region_client(india_base, 'VN')
-    promotion_proxy = vn_client.base_proxy or resolve_upi_promotion_proxy(india_base)
-    promo_headers = _chatgpt_headers(vn_client, token, promotion=True)
-    step('VN promo fingerprint', 'ok', f'VN chrome TLS={vn_client.impersonate}; locale={vn_client.locale}; did={vn_client.device_id[:8]}; proxy={_mask_proxy_summary(promotion_proxy)}')
-    _human_pause('short')
+    if spec.promotion_region:
+        vn_client = _spawn_region_client(india_base, spec.promotion_region)
+        promotion_proxy = vn_client.base_proxy or resolve_upi_promotion_proxy(india_base)
+        promo_headers = _chatgpt_headers(vn_client, token, promotion=True)
+        step(f'{spec.promotion_region} promo fingerprint', 'ok', f'{spec.promotion_region} chrome TLS={vn_client.impersonate}; locale={vn_client.locale}; did={vn_client.device_id[:8]}; proxy={_mask_proxy_summary(promotion_proxy)}')
+        _human_pause('short')
+        referer = f'https://chatgpt.com/checkout/{processor_entity}/{cs_id}'
+        promo_body = {'checkout_session_id': cs_id, 'processor_entity': processor_entity, 'plan_name': 'chatgptplusplan', 'price_interval': 'month', 'seat_quantity': 1, 'promo_campaign': {'promo_campaign_id': spec.promo_campaign_id, 'is_coupon_from_query_param': False}}
+        try:
+            st, text, _ = vn_client.request('POST', 'https://chatgpt.com/backend-api/payments/checkout/update', headers=_target_headers(promo_headers, '/backend-api/payments/checkout/update', referer), json_body=promo_body, proxy=promotion_proxy)
+            promo = _json_or_error(st, text, 'checkout promotion update')
+            if promo.get('success') is False:
+                raise RuntimeError(f'promotion update rejected: {text[:200]}')
+            step(f'{spec.promotion_region} promotion update', 'ok', f'checkout/update via {spec.promotion_region} IP succeeded')
+        finally:
+            vn_client.close()
+        step('region handoff', 'info', f'cooling down after {spec.promotion_region} promo; spawning fresh {spec.country} identity')
+        _human_pause('handoff')
+        client.close()
+        india = _spawn_region_client(india_base, spec.country, fresh_sid=True)
+        try:
+            return _run_upi_india_phase(india, token=token, step=step, steps=steps, cs_id=cs_id, processor_entity=processor_entity, stripe_pk=stripe_pk, stripe_init=stripe_init, referer=referer, india_base=india_base, spec=spec)
+        finally:
+            india.close()
     referer = f'https://chatgpt.com/checkout/{processor_entity}/{cs_id}'
-    promo_body = {'checkout_session_id': cs_id, 'processor_entity': processor_entity, 'plan_name': 'chatgptplusplan', 'price_interval': 'month', 'seat_quantity': 1, 'promo_campaign': {'promo_campaign_id': 'plus-1-month-free', 'is_coupon_from_query_param': False}}
-    try:
-        st, text, _ = vn_client.request('POST', 'https://chatgpt.com/backend-api/payments/checkout/update', headers=_target_headers(promo_headers, '/backend-api/payments/checkout/update', referer), json_body=promo_body, proxy=promotion_proxy)
-        promo = _json_or_error(st, text, 'checkout promotion update')
-        if promo.get('success') is False:
-            raise RuntimeError(f'promotion update rejected: {text[:200]}')
-        step('VN promotion update', 'ok', 'checkout/update via VN IP + vi-VN succeeded')
-    finally:
-        vn_client.close()
-    step('region handoff', 'info', 'cooling down after VN promo; spawning fresh India identity')
-    _human_pause('handoff')
-    client.close()
-    india = _spawn_region_client(india_base, 'IN', fresh_sid=True)
-    try:
-        return _run_upi_india_phase(india, token=token, step=step, steps=steps, cs_id=cs_id, processor_entity=processor_entity, stripe_pk=stripe_pk, stripe_init=stripe_init, referer=referer, india_base=india_base)
-    finally:
-        india.close()
+    return _run_upi_india_phase(client, token=token, step=step, steps=steps, cs_id=cs_id, processor_entity=processor_entity, stripe_pk=stripe_pk, stripe_init=stripe_init, referer=referer, india_base=india_base, spec=spec)
 
-def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps: list[dict[str, str]], cs_id: str, processor_entity: str, stripe_pk: str, stripe_init: Any, referer: str, india_base: str) -> dict[str, Any]:
-    provider_proxy = client.base_proxy or proxy_for_region(india_base, PROVIDER_REGION) or india_base
+def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps: list[dict[str, str]], cs_id: str, processor_entity: str, stripe_pk: str, stripe_init: Any, referer: str, india_base: str, spec: Any) -> dict[str, Any]:
+    provider_proxy = client.base_proxy or proxy_for_region(india_base, spec.country) or india_base
     approve_proxy = proxy_for_region(india_base, APPROVE_REGION) or provider_proxy
     headers = _chatgpt_headers(client, token)
-    step('IN reentry fingerprint', 'ok', f'IN chrome TLS={client.impersonate}; locale={client.locale}; did={client.device_id[:8]}; proxy={_mask_proxy_summary(provider_proxy)}')
+    step(f'{spec.country} reentry fingerprint', 'ok', f'{spec.country} chrome TLS={client.impersonate}; locale={client.locale}; did={client.device_id[:8]}; proxy={_mask_proxy_summary(provider_proxy)}')
     _warmup_india_client(client, token, provider_proxy)
-    step('IN reentry warmup', 'ok', 'sentinel/ping on new India IP')
+    step(f'{spec.country} reentry warmup', 'ok', f'sentinel/ping on new {spec.country} IP')
     _human_pause('med')
     init = stripe_init(client, provider_proxy)
     amount = _expected_amount(init)
-    _ensure_upi_offered(init, 'IN reentry after VN promo')
+    _ensure_payment_method_offered(init, spec, f'{spec.country} reentry after promo')
     if amount > AMOUNT_POLICY_MAX:
-        raise RuntimeError(f'upi promo not eligible: amount policy failed after promotion: amount={amount}')
-    step('IN reentry Stripe init', 'ok', f'amount={amount}')
+        raise RuntimeError(f'{spec.rail_id} promo not eligible: amount policy failed after promotion: amount={amount}')
+    step(f'{spec.country} reentry Stripe init', 'ok', f'amount={amount}')
     _human_pause('med')
     email = _jwt_email(token)
-    billing = env_billing_identity('IN', env_prefix='UPI_BILLING_')
-    taxes_body = {'checkout_session_id': cs_id, 'checkout_email': email, 'billing_country': 'IN', 'billing_name': billing.name, 'currency': 'INR', 'tax_id': None, 'processor_entity': processor_entity, 'billing_address': {'line1': billing.line1, 'city': billing.city, 'state': billing.state, 'country': 'IN', 'postal_code': billing.postal}}
+    billing = env_billing_identity(spec.country, env_prefix=spec.billing_env_prefix)
+    taxes_body = {'checkout_session_id': cs_id, 'checkout_email': email, 'billing_country': spec.country, 'billing_name': billing.name, 'currency': spec.currency, 'tax_id': None, 'processor_entity': processor_entity, 'billing_address': {'line1': billing.line1, 'city': billing.city, 'state': billing.state, 'country': spec.country, 'postal_code': billing.postal}}
     client.request('POST', 'https://chatgpt.com/backend-api/payments/checkout/taxes', headers=_target_headers(headers, '/backend-api/payments/checkout/taxes', referer), json_body=taxes_body, proxy=provider_proxy)
-    step('UPI ChatGPT taxes', 'ok', 'country=IN')
+    step(f'{spec.rail_id} ChatGPT taxes', 'ok', f'country={spec.country}')
     _human_pause('short')
-    tax_form = {'eid': 'NA', 'tax_region[country]': 'IN', 'tax_region[postal_code]': billing.postal, 'tax_region[line1]': billing.line1, 'tax_region[city]': billing.city, 'tax_region[state]': billing.state, 'key': stripe_pk}
+    tax_form = {'eid': 'NA', 'tax_region[country]': spec.country, 'tax_region[postal_code]': billing.postal, 'tax_region[line1]': billing.line1, 'tax_region[city]': billing.city, 'tax_region[state]': billing.state, 'key': stripe_pk}
     client.request('POST', f'https://api.stripe.com/v1/payment_pages/{cs_id}', headers=_stripe_headers(client), form=tax_form, proxy=provider_proxy)
-    step('UPI Stripe tax region', 'ok', 'country=IN')
+    step(f'{spec.rail_id} Stripe tax region', 'ok', f'country={spec.country}')
     _human_pause('short')
     init = stripe_init(client, provider_proxy)
     amount = _expected_amount(init)
-    _ensure_upi_offered(init, 'tax refresh')
+    _ensure_payment_method_offered(init, spec, 'tax refresh')
     if amount > AMOUNT_POLICY_MAX:
-        raise RuntimeError(f'upi promo not eligible: amount policy failed after tax sync: amount={amount}')
-    step('UPI tax Stripe init', 'ok', f'amount={amount}')
+        raise RuntimeError(f'{spec.rail_id} promo not eligible: amount policy failed after tax sync: amount={amount}')
+    step(f'{spec.rail_id} tax Stripe init', 'ok', f'amount={amount}')
     _human_pause('med')
-    pm_form = {'billing_details[name]': billing.name, 'billing_details[email]': email, 'billing_details[address][country]': 'IN', 'billing_details[address][line1]': billing.line1, 'billing_details[address][city]': billing.city, 'billing_details[address][state]': billing.state, 'billing_details[address][postal_code]': billing.postal, 'type': 'upi', 'client_attribution_metadata[checkout_session_id]': cs_id, 'key': stripe_pk}
+    pm_form = {'billing_details[name]': billing.name, 'billing_details[email]': email, 'billing_details[address][country]': spec.country, 'billing_details[address][line1]': billing.line1, 'billing_details[address][city]': billing.city, 'billing_details[address][state]': billing.state, 'billing_details[address][postal_code]': billing.postal, 'type': spec.payment_method_type, 'client_attribution_metadata[checkout_session_id]': cs_id, 'key': stripe_pk}
     st, text, _ = client.request('POST', 'https://api.stripe.com/v1/payment_methods', headers=_stripe_headers(client), form=pm_form, proxy=provider_proxy)
     pm = _json_or_error(st, text, 'stripe payment_methods')
     pm_id = _first_string(pm, ['id'])
@@ -1096,12 +1106,12 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
     step('payment method', 'ok', pm_id)
     _human_pause('long')
     sid = uuid.uuid4().hex
-    confirm_form = {'eid': 'NA', 'payment_method': pm_id, 'expected_amount': str(amount), 'expected_payment_method_type': 'upi', 'return_url': _stripe_confirm_return_url(cs_id, processor_entity, init.get('_stripe_hosted_url', '')), '_stripe_version': STRIPE_VERSION, 'guid': sid, 'muid': sid, 'sid': sid, 'key': stripe_pk, 'version': STRIPE_RUNTIME_VERSION, 'init_checksum': _first_string(init, ['init_checksum']), 'client_attribution_metadata[client_session_id]': str(uuid.uuid4()), 'client_attribution_metadata[checkout_session_id]': cs_id, 'client_attribution_metadata[merchant_integration_source]': 'checkout', 'client_attribution_metadata[merchant_integration_version]': 'custom_checkout', 'client_attribution_metadata[payment_method_selection_flow]': 'automatic', 'client_attribution_metadata[checkout_config_id]': _first_string(init, ['config_id']), 'link_brand': 'link'}
+    confirm_form = {'eid': 'NA', 'payment_method': pm_id, 'expected_amount': str(amount), 'expected_payment_method_type': spec.payment_method_type, 'return_url': _stripe_confirm_return_url(cs_id, processor_entity, init.get('_stripe_hosted_url', '')), '_stripe_version': STRIPE_VERSION, 'guid': sid, 'muid': sid, 'sid': sid, 'key': stripe_pk, 'version': STRIPE_RUNTIME_VERSION, 'init_checksum': _first_string(init, ['init_checksum']), 'client_attribution_metadata[client_session_id]': str(uuid.uuid4()), 'client_attribution_metadata[checkout_session_id]': cs_id, 'client_attribution_metadata[merchant_integration_source]': 'checkout', 'client_attribution_metadata[merchant_integration_version]': 'custom_checkout', 'client_attribution_metadata[payment_method_selection_flow]': 'automatic', 'client_attribution_metadata[checkout_config_id]': _first_string(init, ['config_id']), 'link_brand': 'link'}
     st, text, _ = client.request('POST', f'https://api.stripe.com/v1/payment_pages/{cs_id}/confirm', headers=_stripe_headers(client), form=confirm_form, proxy=provider_proxy)
     confirm = _json_or_error(st, text, 'stripe confirm')
     step('stripe confirm', 'ok', 'completed')
     _human_pause('long')
-    stripe_redirect = _extract_redirect_url(confirm) or _extract_upi_from_text(text)
+    stripe_redirect = _extract_redirect_url(confirm, spec) or _extract_rail_from_text(text, spec)
     if not stripe_redirect and _confirm_requires_approval(confirm):
         approve_body = {'checkout_session_id': cs_id, 'processor_entity': processor_entity}
         approve_headers = _target_headers(headers, '/backend-api/payments/checkout/approve', referer)
@@ -1125,7 +1135,7 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
             last_approve_detail = f"result={result or 'empty'}; body={text[:240]}"
             if result == 'approved':
                 step('approve', 'ok', f'attempt {i}/{MAX_APPROVE_ATTEMPTS}')
-                polled = _poll_upi_redirect_after_approve(client, cs_id, stripe_pk, steps, provider_proxy, step)
+                polled = _poll_upi_redirect_after_approve(client, cs_id, stripe_pk, steps, provider_proxy, step, spec=spec)
                 if polled:
                     stripe_redirect = polled
                     approved = True
@@ -1134,7 +1144,7 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
             step('approve response', 'warn' if result == 'blocked' else 'info', last_approve_detail)
             if result == 'blocked':
                 raise RuntimeError('chatgpt approve blocked by risk control: result=blocked')
-            quick_url = _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, max_attempts=2, sleep_sec=0.8, quiet=True)
+            quick_url = _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, max_attempts=2, sleep_sec=0.8, quiet=True, spec=spec)
             if quick_url:
                 stripe_redirect = quick_url
                 approved = True
@@ -1144,10 +1154,10 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
         if not approved:
             raise RuntimeError(f'chatgpt approve failed after retries: {last_approve_detail}')
     if not stripe_redirect:
-        stripe_redirect = _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy)
+        stripe_redirect = _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, spec=spec)
     long_url = _resolve_external_redirect(client, stripe_redirect, provider_proxy) or stripe_redirect
     step('provider redirect', 'ok', long_url)
-    return {'success': True, 'ok': True, 'long_url': long_url, 'cs_id': cs_id, 'billing_country': 'IN', 'currency': 'INR', 'payment_method_id': pm_id, 'amount': amount}
+    return {'success': True, 'ok': True, 'long_url': long_url, 'cs_id': cs_id, 'billing_country': spec.country, 'currency': spec.currency, 'payment_method_id': pm_id, 'amount': amount, 'rail_id': spec.rail_id}
 
 def _is_rebuild_retryable(exc: Exception) -> bool:
     detail = str(exc).lower()
@@ -1161,21 +1171,21 @@ def _is_rebuild_retryable(exc: Exception) -> bool:
         return True
     return any((code in detail for code in ('502', '503', '504')))
 
-def _poll_upi_redirect_after_approve(client: UpiHttpClient, cs_id: str, stripe_pk: str, steps: list[dict[str, str]], provider_proxy: str, step: Any) -> str:
-    url = _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, max_attempts=APPROVED_REDIRECT_POLL_ATTEMPTS, sleep_sec=1.0)
+def _poll_upi_redirect_after_approve(client: UpiHttpClient, cs_id: str, stripe_pk: str, steps: list[dict[str, str]], provider_proxy: str, step: Any, spec: Any=None) -> str:
+    url = _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, max_attempts=APPROVED_REDIRECT_POLL_ATTEMPTS, sleep_sec=1.0, spec=spec)
     if url:
         return url
     step('stripe redirect wait', 'info', f'phase1={APPROVED_REDIRECT_POLL_ATTEMPTS} done; polling up to {MAX_REDIRECT_POLL_ATTEMPTS} more on same cs')
-    return _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, max_attempts=MAX_REDIRECT_POLL_ATTEMPTS, sleep_sec=1.2)
+    return _poll_stripe_redirect(client, cs_id, stripe_pk, steps, provider_proxy, max_attempts=MAX_REDIRECT_POLL_ATTEMPTS, sleep_sec=1.2, spec=spec)
 
-def _poll_stripe_redirect(client: UpiHttpClient, cs_id: str, stripe_pk: str, steps: list[dict[str, str]], provider_proxy: str, *, max_attempts: int | None=None, sleep_sec: float=1.2, quiet: bool=False) -> str:
+def _poll_stripe_redirect(client: UpiHttpClient, cs_id: str, stripe_pk: str, steps: list[dict[str, str]], provider_proxy: str, *, max_attempts: int | None=None, sleep_sec: float=1.2, quiet: bool=False, spec: Any=None) -> str:
     form = _stripe_poll_form(stripe_pk)
     last_summary = ''
     attempts = int(max_attempts or MAX_REDIRECT_POLL_ATTEMPTS)
     for attempt in range(1, attempts + 1):
         st, text, _ = client.request('GET', f'https://api.stripe.com/v1/payment_pages/{cs_id}', headers=_stripe_headers(client), form=form, proxy=provider_proxy)
         payload = _json_or_error(st, text, 'stripe payment_pages poll')
-        url = _extract_redirect_url(payload) or _extract_upi_from_text(text)
+        url = _extract_redirect_url(payload, spec) or _extract_rail_from_text(text, spec)
         if url:
             return url
         last_summary = _payment_page_poll_summary(payload)
@@ -1199,7 +1209,7 @@ def _resolve_external_redirect(client: UpiHttpClient, redirect_url: str, provide
             body_json = json.loads(text) if text.strip().startswith('{') else {}
         except json.JSONDecodeError:
             body_json = {}
-        found = _extract_upi_from_text(text) or _find_upi_action_url(body_json)
+        found = _extract_rail_from_text(text, spec) or _find_upi_action_url(body_json, spec)
         if found:
             return found
         location = hdrs.get('location', '')
