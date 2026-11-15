@@ -836,6 +836,21 @@ def _import_build_sentinel_token():
 
     return _quickjs_adapter
 
+def _sentinel_checkout_headers(client: UpiHttpClient) -> dict[str, str]:
+    """Sentinel headers required by the current payments/checkout create + update endpoints."""
+    out: dict[str, str] = {}
+    try:
+        build_sentinel_token = _import_build_sentinel_token()
+        if build_sentinel_token is None:
+            return out
+        token = build_sentinel_token(client.session, client.device_id, flow='chatgpt_checkout')
+        if token:
+            out['OpenAI-Sentinel-Token'] = token
+            out['OAI-Telemetry'] = '[1,null]'
+    except Exception:
+        pass
+    return out
+
 def _attach_approve_sentinel(client: UpiHttpClient, headers: dict[str, str]) -> dict[str, str]:
     out = dict(headers)
     try:
@@ -843,10 +858,11 @@ def _attach_approve_sentinel(client: UpiHttpClient, headers: dict[str, str]) -> 
         if build_sentinel_token is None:
             out['_upi_sentinel_error'] = 'optional chatgpt_rt_oauth module not installed'
             return out
-        for flow in ('authorize_continue', 'checkout_pay', 'checkout_approve'):
+        for flow in ('chatgpt_checkout', 'checkout_session_approval', 'authorize_continue', 'checkout_pay', 'checkout_approve'):
             token = build_sentinel_token(client.session, client.device_id, flow=flow, user_agent=client.ua, sec_ch_ua=client.sec_ch_ua, impersonate=client.impersonate, sec_ch_ua_platform=client.sec_ch_ua_platform, accept_language=client.accept_language, locale=client.locale)
             if token:
-                out['openai-sentinel-token'] = token
+                out['OpenAI-Sentinel-Token'] = token
+                out['OAI-Telemetry'] = '[1,null]'
                 out['_upi_sentinel_flow'] = flow
                 break
     except Exception as exc:
@@ -1106,6 +1122,7 @@ def _run_upi_attempt(client: UpiHttpClient, token: str, step: Any, steps: list[d
     ch = dict(headers)
     ch['x-openai-target-path'] = '/backend-api/payments/checkout'
     ch['x-openai-target-route'] = '/backend-api/payments/checkout'
+    ch.update(_sentinel_checkout_headers(client))
     status, text, _ = client.request('POST', 'https://chatgpt.com/backend-api/payments/checkout', headers=ch, json_body=checkout_body, proxy=checkout_proxy)
     checkout = _json_or_error(status, text, 'checkout create')
     cs_id = _first_string(checkout, ['checkout_session_id', 'session_id', 'id'])
@@ -1219,8 +1236,8 @@ def _run_upi_india_phase(client: UpiHttpClient, *, token: str, step: Any, steps:
             current_approve_headers = _attach_approve_sentinel(client, approve_headers)
             sentinel_flow = str(current_approve_headers.pop('_upi_sentinel_flow', '') or '')
             sentinel_err = str(current_approve_headers.pop('_upi_sentinel_error', '') or '')
-            has_sentinel = bool(current_approve_headers.get('openai-sentinel-token'))
-            step('approve sentinel', 'ok' if has_sentinel else 'warn', f"attached flow={sentinel_flow}; len={len(current_approve_headers.get('openai-sentinel-token') or '')}" if has_sentinel else f"missing sentinel; err={sentinel_err or 'empty token'}")
+            has_sentinel = bool(current_approve_headers.get('OpenAI-Sentinel-Token') or current_approve_headers.get('openai-sentinel-token'))
+            step('approve sentinel', 'ok' if has_sentinel else 'warn', f"attached flow={sentinel_flow}; len={len((current_approve_headers.get('OpenAI-Sentinel-Token') or current_approve_headers.get('openai-sentinel-token') or ''))}" if has_sentinel else f"missing sentinel; err={sentinel_err or 'empty token'}")
             if i > 1:
                 step('approve retry', 'info', f'attempt {i}/{MAX_APPROVE_ATTEMPTS}; fresh sid + sentinel')
             st, text, _ = client.request('POST', 'https://chatgpt.com/backend-api/payments/checkout/approve', headers=current_approve_headers, json_body=approve_body, proxy=current_approve_proxy)
